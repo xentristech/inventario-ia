@@ -120,6 +120,22 @@ type RotationDashboard = {
   lowAlerts: RotationItem[];
 };
 
+type ClientProductHistory = {
+  key: string;
+  sku: string;
+  productId?: string;
+  productName: string;
+  client: string;
+  brand?: string;
+  location?: string;
+  stock: number | null;
+  totalQuantity: number;
+  times: number;
+  lastDate: string;
+  lastReference: string;
+  product?: Product;
+};
+
 type PrintView = "exit" | "no-stock" | "return" | null;
 
 const emptyForm: ProductForm = {
@@ -197,6 +213,7 @@ function App() {
   const [sheetUrl, setSheetUrl] = useState("");
   const [importRows, setImportRows] = useState<ImportRow[]>([]);
   const [importStatus, setImportStatus] = useState("");
+  const [historyQuery, setHistoryQuery] = useState("");
   const [cloudReady, setCloudReady] = useState(false);
   const [cloudStatus, setCloudStatus] = useState("Sincronizando nube...");
   const localInventoryAvailable = isLocalRuntime();
@@ -325,6 +342,15 @@ function App() {
     [exitLines, products]
   );
   const stagedExitQuantity = resolvedExitLines.reduce((sum, line) => sum + line.quantity, 0);
+  const knownClients = useMemo(() => buildClientOptions(exits), [exits]);
+  const filteredHistoryExits = useMemo(
+    () => filterExitHistory(exits, historyQuery).slice(0, 80),
+    [exits, historyQuery]
+  );
+  const clientProductHistory = useMemo(
+    () => buildClientProductHistory(exits, products, historyQuery),
+    [exits, products, historyQuery]
+  );
   const selectedReturnExit = useMemo(
     () => exits.find((exit) => exit.id === returnForm.originalExitId),
     [exits, returnForm.originalExitId]
@@ -524,6 +550,41 @@ function App() {
     });
     setExitForm((current) => ({ ...current, sku: "", quantity: "1" }));
     setExitStatus(`Item agregado: ${product.sku} x ${quantity}.`);
+  }
+
+  function repeatHistoryProduct(item: ClientProductHistory) {
+    const product = item.product || findProductForSku(products, item.sku);
+    if (!product) {
+      setExitStatus("Ese producto esta en el historial, pero ya no existe en el inventario actual.");
+      return;
+    }
+
+    const stagedQuantity = exitLines
+      .filter((line) => normalizeSku(line.sku) === normalizeSku(product.sku))
+      .reduce((sum, line) => sum + line.quantity, 0);
+
+    if (stagedQuantity + 1 > product.stock) {
+      setExitStatus(`No hay stock suficiente para ${product.sku}. Stock actual: ${product.stock}.`);
+      return;
+    }
+
+    setExitForm((current) => ({
+      ...current,
+      client: current.client.trim() || item.client,
+      sku: product.sku,
+      quantity: "1"
+    }));
+    setExitLines((current) => {
+      const cleanSku = normalizeSku(product.sku);
+      const existing = current.find((line) => normalizeSku(line.sku) === cleanSku);
+      if (existing) {
+        return current.map((line) =>
+          normalizeSku(line.sku) === cleanSku ? { ...line, quantity: line.quantity + 1 } : line
+        );
+      }
+      return [...current, { id: createId("lin"), sku: product.sku, quantity: 1 }];
+    });
+    setExitStatus(`Agregado desde historial: ${product.sku} x 1 para ${item.client}.`);
   }
 
   function handleExitItemKeyDown(event: KeyboardEvent<HTMLInputElement>) {
@@ -1266,12 +1327,18 @@ function App() {
                 <label>
                   Cliente
                   <input
+                    list="client-name-list"
                     value={exitForm.client}
                     onChange={(event) => setExitForm({ ...exitForm, client: event.target.value })}
                     placeholder="Nombre del cliente"
                   />
                 </label>
               </div>
+              <datalist id="client-name-list">
+                {knownClients.map((client) => (
+                  <option key={client} value={client} />
+                ))}
+              </datalist>
               <label>
                 Referencia de salida
                 <input
@@ -1412,33 +1479,96 @@ function App() {
                 <FileText size={18} />
                 <h2>Historial de salidas</h2>
               </div>
-              {exits.length ? (
-                <div className="table-wrap">
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>Fecha</th>
-                        <th>Salida</th>
-                        <th>Ref</th>
-                        <th>Producto</th>
-                        <th>Cliente</th>
-                        <th>Cant.</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {exits.slice(0, 80).map((exit) => (
-                        <tr key={exit.id}>
-                          <td>{exit.date}</td>
-                          <td>{exit.reference}</td>
-                          <td>{exit.sku}</td>
-                          <td>{exit.productName}</td>
-                          <td>{exit.client}</td>
-                          <td>{exit.quantity}</td>
-                        </tr>
+              <div className="searchbar">
+                <Search size={18} />
+                <input
+                  list="client-name-list"
+                  value={historyQuery}
+                  onChange={(event) => setHistoryQuery(event.target.value)}
+                  placeholder="Buscar cliente, producto, ref o salida"
+                />
+              </div>
+
+              {historyQuery.trim() && (
+                <div className="client-history">
+                  <div className="exit-lines-header">
+                    <span>
+                      {clientProductHistory.length
+                        ? `${clientProductHistory.length} producto${clientProductHistory.length === 1 ? "" : "s"} encontrados`
+                        : "Sin productos repetibles"}
+                    </span>
+                    <strong>{historyQuery.trim()}</strong>
+                  </div>
+                  {clientProductHistory.length ? (
+                    <div className="client-history-list">
+                      {clientProductHistory.slice(0, 10).map((item) => (
+                        <article className="client-history-item" key={item.key}>
+                          <div className="client-history-main">
+                            <strong>{item.productName}</strong>
+                            <span>
+                              {item.sku} - {item.client}
+                            </span>
+                            <span>
+                              Ultima: {item.lastDate} - {item.lastReference}
+                            </span>
+                          </div>
+                          <div className="client-history-numbers">
+                            <span>Total</span>
+                            <strong>{item.totalQuantity}</strong>
+                            <em>{item.times} salida{item.times === 1 ? "" : "s"}</em>
+                          </div>
+                          <div className="client-history-numbers">
+                            <span>Stock</span>
+                            <strong>{item.stock ?? "-"}</strong>
+                            <em>{item.location || "-"}</em>
+                          </div>
+                          <button
+                            className="secondary-button tiny"
+                            onClick={() => repeatHistoryProduct(item)}
+                            type="button"
+                          >
+                            Vender otra vez
+                          </button>
+                        </article>
                       ))}
-                    </tbody>
-                  </table>
+                    </div>
+                  ) : (
+                    <EmptyState label="No encontre productos en el historial para esa busqueda." />
+                  )}
                 </div>
+              )}
+
+              {exits.length ? (
+                filteredHistoryExits.length ? (
+                  <div className="table-wrap">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>Fecha</th>
+                          <th>Salida</th>
+                          <th>Ref</th>
+                          <th>Producto</th>
+                          <th>Cliente</th>
+                          <th>Cant.</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {filteredHistoryExits.map((exit) => (
+                          <tr key={exit.id}>
+                            <td>{exit.date}</td>
+                            <td>{exit.reference}</td>
+                            <td>{exit.sku}</td>
+                            <td>{exit.productName}</td>
+                            <td>{exit.client}</td>
+                            <td>{exit.quantity}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <EmptyState label="No hay salidas que coincidan con esa busqueda." />
+                )
               ) : (
                 <EmptyState label="Aun no hay salidas registradas." />
               )}
@@ -2451,6 +2581,96 @@ function formatCloudDate(value?: string | null) {
     hour: "2-digit",
     minute: "2-digit"
   })})`;
+}
+
+function buildClientOptions(exits: ProductExit[]) {
+  const clients = new Map<string, string>();
+  for (const exit of exits) {
+    const cleanClient = exit.client.trim();
+    if (!cleanClient) continue;
+    const key = normalizeHeader(cleanClient);
+    if (!clients.has(key)) clients.set(key, cleanClient);
+  }
+  return Array.from(clients.values()).sort((a, b) => a.localeCompare(b, "es"));
+}
+
+function filterExitHistory(exits: ProductExit[], query: string) {
+  const cleanQuery = normalizeHeader(query);
+  const sortedExits = [...exits].sort((a, b) => exitTimestamp(b) - exitTimestamp(a));
+  if (!cleanQuery) return sortedExits;
+  return sortedExits.filter((exit) => normalizeHeader(historySearchText(exit)).includes(cleanQuery));
+}
+
+function buildClientProductHistory(
+  exits: ProductExit[],
+  products: Product[],
+  query: string
+): ClientProductHistory[] {
+  const cleanQuery = normalizeHeader(query);
+  if (!cleanQuery) return [];
+
+  const directClientMatches = exits.filter((exit) => normalizeHeader(exit.client).includes(cleanQuery));
+  const sourceExits = directClientMatches.length ? directClientMatches : filterExitHistory(exits, query);
+  const history = new Map<string, ClientProductHistory>();
+
+  for (const exit of sourceExits) {
+    const product = findProductForSku(products, exit.sku);
+    const key = product?.id || normalizeSku(exit.sku);
+    const current = history.get(key);
+
+    if (current) {
+      current.totalQuantity += exit.quantity;
+      current.times += 1;
+      if (exitTimestamp(exit) >= exitTimestampFromParts(current.lastDate, current.lastReference)) {
+        current.lastDate = exit.date;
+        current.lastReference = exit.reference;
+        current.client = exit.client;
+      }
+      continue;
+    }
+
+    history.set(key, {
+      key,
+      sku: product?.sku || exit.sku,
+      productId: product?.id || exit.productId,
+      productName: product?.name || exit.productName,
+      client: exit.client,
+      brand: product?.brand || exit.brand,
+      location: product?.location || exit.location,
+      stock: product ? product.stock : null,
+      totalQuantity: exit.quantity,
+      times: 1,
+      lastDate: exit.date,
+      lastReference: exit.reference,
+      product
+    });
+  }
+
+  return Array.from(history.values()).sort((a, b) => {
+    const dateCompare = exitTimestampFromParts(b.lastDate, b.lastReference) - exitTimestampFromParts(a.lastDate, a.lastReference);
+    return dateCompare || b.totalQuantity - a.totalQuantity || a.productName.localeCompare(b.productName, "es");
+  });
+}
+
+function historySearchText(exit: ProductExit) {
+  return [
+    exit.client,
+    exit.reference,
+    exit.sku,
+    exit.productName,
+    exit.brand,
+    exit.location,
+    exit.date,
+    exit.notes
+  ].join(" ");
+}
+
+function exitTimestamp(exit: ProductExit) {
+  return Date.parse(exit.createdAt || exit.date) || Date.parse(exit.date) || 0;
+}
+
+function exitTimestampFromParts(date: string, reference: string) {
+  return Date.parse(date) || Date.parse(reference) || 0;
 }
 
 function buildRotationDashboard(products: Product[]): RotationDashboard {

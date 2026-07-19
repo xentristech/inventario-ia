@@ -706,6 +706,72 @@ textarea:focus {
   white-space: nowrap;
 }
 
+.client-history {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 14px;
+  padding: 12px;
+  border: 1px solid rgba(17, 17, 17, 0.1);
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.client-history-list {
+  display: grid;
+  gap: 8px;
+}
+
+.client-history-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 72px 72px auto;
+  gap: 10px;
+  align-items: center;
+  min-height: 64px;
+  padding: 10px;
+  border: 1px solid #e7e7e7;
+  border-radius: 8px;
+  background: var(--chalk);
+}
+
+.client-history-main {
+  min-width: 0;
+}
+
+.client-history-main strong,
+.client-history-main span {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.client-history-main strong {
+  font-family: Oswald, Montserrat, sans-serif;
+  line-height: 1.15;
+  text-transform: uppercase;
+}
+
+.client-history-main span,
+.client-history-numbers span,
+.client-history-numbers em {
+  color: var(--steel);
+  font-size: 0.78rem;
+}
+
+.client-history-numbers {
+  display: grid;
+  gap: 2px;
+  text-align: right;
+}
+
+.client-history-numbers strong {
+  color: var(--ink);
+  font-family: Oswald, Montserrat, sans-serif;
+  font-size: 1.08rem;
+}
+
+.client-history-numbers em {
+  font-style: normal;
+}
+
 .exit-line-list {
   display: grid;
   gap: 8px;
@@ -1071,12 +1137,25 @@ tr:last-child td {
     grid-template-columns: repeat(2, minmax(0, 1fr)) 34px;
   }
 
+  .client-history-item {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .client-history-main {
+    grid-column: 1 / -1;
+  }
+
+  .client-history-item .secondary-button {
+    grid-column: 1 / -1;
+  }
+
   .exit-line-main {
     grid-column: 1 / -1;
   }
 
   .exit-line-stock,
-  .exit-line-quantity {
+  .exit-line-quantity,
+  .client-history-numbers {
     text-align: left;
   }
 
