@@ -197,6 +197,14 @@ button {
   font-weight: 800;
 }
 
+.cloud-status {
+  display: block;
+  margin-top: 6px;
+  color: var(--steel);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
 .topbar-actions,
 .button-row,
 .card-actions {

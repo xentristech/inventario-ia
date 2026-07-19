@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import multer from "multer";
 import readXlsxFile from "read-excel-file/node";
 import { extractInvoiceFromFile } from "./aiInvoice.js";
+import { readCloudState, writeCloudState } from "./cloudState.js";
 
 const currentInventoryPath =
   process.env.CURRENT_INVENTORY_PATH || "C:\\Users\\user\\Downloads\\copia inventario.xlsx";
@@ -15,7 +16,7 @@ const upload = multer({
 export const app = express();
 
 app.use(cors({ origin: ["http://127.0.0.1:5173", "http://localhost:5173"] }));
-app.use(express.json({ limit: "2mb" }));
+app.use(express.json({ limit: "10mb" }));
 
 app.get("/api/health", (_req, res) => {
   res.json({
@@ -23,6 +24,22 @@ app.get("/api/health", (_req, res) => {
     aiConfigured: Boolean(process.env.OPENAI_API_KEY),
     model: process.env.OPENAI_MODEL || "gpt-5-mini"
   });
+});
+
+app.get("/api/state", async (_req, res) => {
+  try {
+    res.json(await readCloudState());
+  } catch (error) {
+    res.status(503).json({ error: "CLOUD_STATE_UNAVAILABLE", detail: errorMessage(error) });
+  }
+});
+
+app.put("/api/state", async (req, res) => {
+  try {
+    res.json(await writeCloudState(req.body));
+  } catch (error) {
+    res.status(503).json({ error: "CLOUD_STATE_SAVE_FAILED", detail: errorMessage(error) });
+  }
 });
 
 app.get("/api/sheet", async (req, res) => {
@@ -166,6 +183,10 @@ function cellToText(value: unknown) {
     return Number.isInteger(value) ? String(value) : String(value);
   }
   return String(value).trim();
+}
+
+function errorMessage(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
 }
 
 export default app;

@@ -21,18 +21,22 @@ import {
   X
 } from "lucide-react";
 import Papa from "papaparse";
-import { ChangeEvent, FormEvent, KeyboardEvent, useEffect, useMemo, useState } from "react";
+import { ChangeEvent, FormEvent, KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
 import { sampleProducts } from "./sampleData";
 import {
+  clearLocalInventoryData,
+  loadCloudSnapshot,
   loadExits,
   loadInvoices,
   loadProducts,
   loadReturns,
+  saveCloudSnapshot,
   saveExits,
   saveInvoices,
   saveProducts,
   saveReturns
 } from "./storage";
+import type { InventorySnapshot } from "./storage";
 import type {
   ImportRow,
   InvoiceExtraction,
@@ -193,12 +197,68 @@ function App() {
   const [sheetUrl, setSheetUrl] = useState("");
   const [importRows, setImportRows] = useState<ImportRow[]>([]);
   const [importStatus, setImportStatus] = useState("");
+  const [cloudReady, setCloudReady] = useState(false);
+  const [cloudStatus, setCloudStatus] = useState("Sincronizando nube...");
   const localInventoryAvailable = isLocalRuntime();
+  const initialSnapshotRef = useRef<InventorySnapshot | null>(null);
+
+  if (!initialSnapshotRef.current) {
+    initialSnapshotRef.current = createSnapshot(products, invoices, exits, productReturns);
+  }
 
   useEffect(() => saveProducts(products), [products]);
   useEffect(() => saveInvoices(invoices), [invoices]);
   useEffect(() => saveExits(exits), [exits]);
   useEffect(() => saveReturns(productReturns), [productReturns]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    loadCloudSnapshot()
+      .then((snapshot) => {
+        if (cancelled) return;
+        if (!snapshot) {
+          setCloudStatus("Nube no disponible. Se guarda en este navegador.");
+          return;
+        }
+
+        if (hasSnapshotData(snapshot)) {
+          const localSnapshot = initialSnapshotRef.current || createSnapshot(products, invoices, exits, productReturns);
+          const mergedSnapshot = mergeStartupSnapshot(snapshot, localSnapshot);
+          applySnapshot(mergedSnapshot);
+          setImportStatus(`Inventario sincronizado en nube${formatCloudDate(snapshot.updatedAt)}.`);
+          setCloudStatus(`Sincronizado en nube${formatCloudDate(snapshot.updatedAt)}.`);
+        } else {
+          setCloudStatus("Nube lista. Al importar, quedara disponible para todos.");
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setCloudStatus("Sin conexion con nube. Se guarda en este navegador.");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setCloudReady(true);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!cloudReady) return;
+
+    const snapshot = createSnapshot(products, invoices, exits, productReturns);
+    const handle = window.setTimeout(() => {
+      setCloudStatus("Guardando en nube...");
+      saveCloudSnapshot(snapshot)
+        .then((savedSnapshot) => setCloudStatus(`Sincronizado en nube${formatCloudDate(savedSnapshot.updatedAt)}.`))
+        .catch(() => setCloudStatus("No se pudo guardar en nube. Queda en este navegador."));
+    }, 900);
+
+    return () => window.clearTimeout(handle);
+  }, [cloudReady, products, invoices, exits, productReturns]);
   useEffect(() => {
     if (loadProducts().length > 0) return;
 
@@ -295,11 +355,15 @@ function App() {
     setView("dashboard");
   }
 
-  function resetAll() {
-    setProducts([]);
-    setInvoices([]);
-    setExits([]);
-    setProductReturns([]);
+  function applySnapshot(snapshot: InventorySnapshot) {
+    setProducts(snapshot.products);
+    setInvoices(snapshot.invoices);
+    setExits(snapshot.exits);
+    setProductReturns(snapshot.productReturns);
+  }
+
+  async function resetAll() {
+    clearLocalInventoryData();
     setInvoiceDraft(null);
     setImportRows([]);
     setExitForm(emptyExitForm());
@@ -310,6 +374,23 @@ function App() {
     setReturnStatus("");
     setPrintableReturn(null);
     setPrintView(null);
+    setCloudStatus("Recargando inventario de la nube...");
+
+    try {
+      const snapshot = await loadCloudSnapshot();
+      if (snapshot && hasSnapshotData(snapshot)) {
+        applySnapshot(snapshot);
+        setImportStatus("Datos de este navegador limpiados. Inventario de nube recargado.");
+        setCloudStatus(`Sincronizado en nube${formatCloudDate(snapshot.updatedAt)}.`);
+      } else {
+        applySnapshot(createSnapshot([], [], [], []));
+        setImportStatus("Datos de este navegador limpiados.");
+        setCloudStatus("Nube lista. Al importar, quedara disponible para todos.");
+      }
+    } catch {
+      setImportStatus("Datos de este navegador limpiados. No pude recargar la nube.");
+      setCloudStatus("No se pudo conectar con la nube.");
+    }
   }
 
   function submitProduct(event: FormEvent) {
@@ -975,6 +1056,7 @@ function App() {
             <p>{new Date().toLocaleDateString("es-CO", { weekday: "long", day: "numeric", month: "long" })}</p>
             <h1>{titleForView(view)}</h1>
             <span className="brand-slogan">Movemos tu carga, impulsamos tu operacion.</span>
+            <span className="cloud-status">{cloudStatus}</span>
           </div>
           <div className="topbar-actions">
             <button className="secondary-button" onClick={() => setView("invoices")} type="button">
@@ -1795,7 +1877,7 @@ function App() {
         <footer className="workspace-footer">
           <button className="danger-link" onClick={resetAll} type="button">
             <Trash2 size={15} />
-            Vaciar datos locales
+            Limpiar este navegador
           </button>
         </footer>
       </main>
@@ -2289,6 +2371,86 @@ function titleForView(view: View) {
     import: "Importacion"
   };
   return titles[view];
+}
+
+function createSnapshot(
+  products: Product[],
+  invoices: InvoiceRecord[],
+  exits: ProductExit[],
+  productReturns: ProductReturn[]
+): InventorySnapshot {
+  return { products, invoices, exits, productReturns };
+}
+
+function hasSnapshotData(snapshot: InventorySnapshot | null | undefined) {
+  return Boolean(
+    snapshot &&
+      (snapshot.products.length ||
+        snapshot.invoices.length ||
+        snapshot.exits.length ||
+        snapshot.productReturns.length)
+  );
+}
+
+function mergeStartupSnapshot(cloud: InventorySnapshot, local: InventorySnapshot): InventorySnapshot {
+  const preferLocalProducts = hasSnapshotMovements(local) && local.products.length > 0;
+  return {
+    products: preferLocalProducts
+      ? mergeSnapshotProducts(cloud.products, local.products)
+      : mergeSnapshotProducts(local.products, cloud.products),
+    invoices: mergeById(cloud.invoices, local.invoices),
+    exits: mergeById(cloud.exits, local.exits),
+    productReturns: mergeById(cloud.productReturns, local.productReturns),
+    updatedAt: cloud.updatedAt || local.updatedAt || null
+  };
+}
+
+function hasSnapshotMovements(snapshot: InventorySnapshot) {
+  return Boolean(snapshot.invoices.length || snapshot.exits.length || snapshot.productReturns.length);
+}
+
+function mergeSnapshotProducts(primary: Product[], secondary: Product[]) {
+  const next = [...primary];
+  for (const product of secondary) {
+    const sku = normalizeSku(product.sku);
+    const index = next.findIndex(
+      (item) => item.id === product.id || (sku && normalizeSku(item.sku) === sku)
+    );
+    if (index >= 0) {
+      next[index] = {
+        ...next[index],
+        ...product,
+        id: next[index].id || product.id,
+        sku: normalizeSku(product.sku) || next[index].sku
+      };
+    } else {
+      next.push(product);
+    }
+  }
+  return next;
+}
+
+function mergeById<T extends { id: string }>(primary: T[], secondary: T[]) {
+  const next = [...primary];
+  const seen = new Set(primary.map((item) => item.id));
+  for (const item of secondary) {
+    if (seen.has(item.id)) continue;
+    seen.add(item.id);
+    next.push(item);
+  }
+  return next;
+}
+
+function formatCloudDate(value?: string | null) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return ` (${date.toLocaleString("es-CO", {
+    day: "2-digit",
+    month: "short",
+    hour: "2-digit",
+    minute: "2-digit"
+  })})`;
 }
 
 function buildRotationDashboard(products: Product[]): RotationDashboard {
