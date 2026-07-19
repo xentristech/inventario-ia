@@ -193,6 +193,7 @@ function App() {
   const [sheetUrl, setSheetUrl] = useState("");
   const [importRows, setImportRows] = useState<ImportRow[]>([]);
   const [importStatus, setImportStatus] = useState("");
+  const localInventoryAvailable = isLocalRuntime();
 
   useEffect(() => saveProducts(products), [products]);
   useEffect(() => saveInvoices(invoices), [invoices]);
@@ -1718,10 +1719,16 @@ function App() {
                 <FileSpreadsheet size={18} />
                 <h2>Importar inventario</h2>
               </div>
-              <button className="primary-button full" onClick={loadCurrentInventoryFile} type="button">
-                <FileSpreadsheet size={17} />
-                Cargar copia inventario.xlsx
-              </button>
+              {localInventoryAvailable ? (
+                <button className="primary-button full" onClick={loadCurrentInventoryFile} type="button">
+                  <FileSpreadsheet size={17} />
+                  Cargar copia inventario.xlsx
+                </button>
+              ) : (
+                <div className="selected-product muted">
+                  En produccion carga el Excel con el boton Subir Excel o CSV.
+                </div>
+              )}
               <label>
                 Google Sheets o CSV publico
                 <input
@@ -2358,6 +2365,10 @@ function labelForReturnCondition(condition: ReturnCondition) {
     danado: "Danado"
   };
   return labels[condition];
+}
+
+function isLocalRuntime() {
+  return ["localhost", "127.0.0.1"].includes(window.location.hostname);
 }
 
 function toNumber(value: string | number | null | undefined) {
