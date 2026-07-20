@@ -22,7 +22,7 @@ app.get("/api/health", (_req, res) => {
   res.json({
     ok: true,
     aiConfigured: Boolean(process.env.OPENAI_API_KEY),
-    model: process.env.OPENAI_MODEL || "gpt-5-mini"
+    model: process.env.OPENAI_MODEL || "gpt-4.1-mini"
   });
 });
 

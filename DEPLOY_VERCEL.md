@@ -12,7 +12,7 @@ Este proyecto ya esta preparado para desplegarse en Vercel como una app Vite + R
 ## Variables opcionales
 
 - `OPENAI_API_KEY`: activa la extraccion de facturas con IA.
-- `OPENAI_MODEL`: modelo para extraccion de facturas. Si no se define usa `gpt-5-mini`.
+- `OPENAI_MODEL`: modelo para extraccion de facturas. Si no se define usa `gpt-4.1-mini`.
 - `CURRENT_INVENTORY_PATH`: solo sirve en servidores con archivo local accesible. En Vercel normalmente no aplica.
 
 ## Importante sobre datos

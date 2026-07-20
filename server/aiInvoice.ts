@@ -1,4 +1,4 @@
-import { openai, type OpenAILanguageModelResponsesOptions } from "@ai-sdk/openai";
+import { openai, type OpenAIResponsesProviderOptions } from "@ai-sdk/openai";
 import { generateText, Output } from "ai";
 import { z } from "zod";
 
@@ -32,7 +32,7 @@ export async function extractInvoiceFromFile(file: Express.Multer.File): Promise
     throw new Error("OPENAI_API_KEY_MISSING");
   }
 
-  const modelId = process.env.OPENAI_MODEL || "gpt-5-mini";
+  const modelId = process.env.OPENAI_MODEL || "gpt-4.1-mini";
 
   const { output } = await generateText({
     model: openai(modelId),
@@ -62,9 +62,8 @@ export async function extractInvoiceFromFile(file: Express.Multer.File): Promise
     ],
     providerOptions: {
       openai: {
-        store: false,
-        textVerbosity: "low"
-      } satisfies OpenAILanguageModelResponsesOptions
+        store: false
+      } satisfies OpenAIResponsesProviderOptions
     },
     maxRetries: 1,
     timeout: { totalMs: 60000 }
