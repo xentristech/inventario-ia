@@ -3,6 +3,7 @@ import { get, put } from "@vercel/blob";
 export type CloudInventoryState = {
   products: unknown[];
   invoices: unknown[];
+  entries: unknown[];
   exits: unknown[];
   productReturns: unknown[];
   updatedAt: string | null;
@@ -13,6 +14,7 @@ const STATE_PATH = "inventory/state.json";
 export const emptyCloudState: CloudInventoryState = {
   products: [],
   invoices: [],
+  entries: [],
   exits: [],
   productReturns: [],
   updatedAt: null
@@ -61,6 +63,7 @@ function normalizeCloudState(value: unknown): CloudInventoryState {
   return {
     products: normalizeArray(state.products),
     invoices: normalizeArray(state.invoices),
+    entries: normalizeArray(state.entries),
     exits: normalizeArray(state.exits),
     productReturns: normalizeArray(state.productReturns),
     updatedAt: typeof state.updatedAt === "string" ? state.updatedAt : null
@@ -76,6 +79,7 @@ function cloneEmptyState(): CloudInventoryState {
     ...emptyCloudState,
     products: [],
     invoices: [],
+    entries: [],
     exits: [],
     productReturns: []
   };

@@ -1,13 +1,15 @@
-import type { InvoiceRecord, Product, ProductExit, ProductReturn } from "./types";
+import type { InvoiceRecord, Product, ProductEntry, ProductExit, ProductReturn } from "./types";
 
 const PRODUCT_KEY = "inventario-ia-products";
 const INVOICE_KEY = "inventario-ia-invoices";
+const ENTRY_KEY = "inventario-ia-entries";
 const EXIT_KEY = "inventario-ia-exits";
 const RETURN_KEY = "inventario-ia-returns";
 
 export type InventorySnapshot = {
   products: Product[];
   invoices: InvoiceRecord[];
+  entries: ProductEntry[];
   exits: ProductExit[];
   productReturns: ProductReturn[];
   updatedAt?: string | null;
@@ -29,6 +31,14 @@ export function saveInvoices(invoices: InvoiceRecord[]) {
   localStorage.setItem(INVOICE_KEY, JSON.stringify(invoices));
 }
 
+export function loadEntries(): ProductEntry[] {
+  return loadJson<ProductEntry[]>(ENTRY_KEY, []);
+}
+
+export function saveEntries(entries: ProductEntry[]) {
+  localStorage.setItem(ENTRY_KEY, JSON.stringify(entries));
+}
+
 export function loadExits(): ProductExit[] {
   return loadJson<ProductExit[]>(EXIT_KEY, []);
 }
@@ -46,7 +56,7 @@ export function saveReturns(returns: ProductReturn[]) {
 }
 
 export function clearLocalInventoryData() {
-  [PRODUCT_KEY, INVOICE_KEY, EXIT_KEY, RETURN_KEY].forEach((key) => localStorage.removeItem(key));
+  [PRODUCT_KEY, INVOICE_KEY, ENTRY_KEY, EXIT_KEY, RETURN_KEY].forEach((key) => localStorage.removeItem(key));
 }
 
 export async function loadCloudSnapshot(): Promise<InventorySnapshot | null> {
@@ -83,6 +93,7 @@ function normalizeSnapshot(value: unknown): InventorySnapshot {
   return {
     products: Array.isArray(snapshot.products) ? snapshot.products : [],
     invoices: Array.isArray(snapshot.invoices) ? snapshot.invoices : [],
+    entries: Array.isArray(snapshot.entries) ? snapshot.entries : [],
     exits: Array.isArray(snapshot.exits) ? snapshot.exits : [],
     productReturns: Array.isArray(snapshot.productReturns) ? snapshot.productReturns : [],
     updatedAt: typeof snapshot.updatedAt === "string" ? snapshot.updatedAt : null

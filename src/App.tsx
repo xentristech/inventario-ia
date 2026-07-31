@@ -5,6 +5,7 @@ import {
   Camera,
   Check,
   ClipboardList,
+  Download,
   FileDown,
   FileSpreadsheet,
   FileText,
@@ -26,11 +27,13 @@ import { sampleProducts } from "./sampleData";
 import {
   clearLocalInventoryData,
   loadCloudSnapshot,
+  loadEntries,
   loadExits,
   loadInvoices,
   loadProducts,
   loadReturns,
   saveCloudSnapshot,
+  saveEntries,
   saveExits,
   saveInvoices,
   saveProducts,
@@ -43,13 +46,14 @@ import type {
   InvoiceItem,
   InvoiceRecord,
   Product,
+  ProductEntry,
   ProductExit,
   ProductReturn,
   ReturnCondition,
   ReturnType
 } from "./types";
 
-type View = "dashboard" | "products" | "exits" | "returns" | "invoices" | "import";
+type View = "dashboard" | "products" | "entries" | "exits" | "returns" | "invoices" | "import";
 
 type ProductForm = {
   id: string | null;
@@ -82,6 +86,21 @@ type ExitForm = {
 };
 
 type ExitLineDraft = {
+  id: string;
+  sku: string;
+  quantity: number;
+};
+
+type EntryForm = {
+  date: string;
+  sku: string;
+  quantity: string;
+  supplier: string;
+  reference: string;
+  notes: string;
+};
+
+type EntryLineDraft = {
   id: string;
   sku: string;
   quantity: number;
@@ -136,7 +155,7 @@ type ClientProductHistory = {
   product?: Product;
 };
 
-type PrintView = "exit" | "no-stock" | "return" | null;
+type PrintView = "exit" | "entry" | "no-stock" | "return" | null;
 
 const emptyForm: ProductForm = {
   id: null,
@@ -167,6 +186,15 @@ const emptyExitForm = (): ExitForm => ({
   notes: ""
 });
 
+const emptyEntryForm = (): EntryForm => ({
+  date: new Date().toISOString().slice(0, 10),
+  sku: "",
+  quantity: "1",
+  supplier: "",
+  reference: "",
+  notes: ""
+});
+
 const emptyReturnForm = (): ReturnForm => ({
   date: new Date().toISOString().slice(0, 10),
   search: "",
@@ -183,6 +211,7 @@ const emptyReturnForm = (): ReturnForm => ({
 const navItems: Array<{ id: View; label: string; icon: typeof Boxes }> = [
   { id: "dashboard", label: "Panel", icon: Boxes },
   { id: "products", label: "Repuestos", icon: Archive },
+  { id: "entries", label: "Entradas", icon: Download },
   { id: "exits", label: "Salidas", icon: ClipboardList },
   { id: "returns", label: "Cambios", icon: RotateCcw },
   { id: "invoices", label: "Facturas", icon: FileText },
@@ -193,6 +222,7 @@ function App() {
   const [view, setView] = useState<View>("dashboard");
   const [products, setProducts] = useState<Product[]>(() => loadProducts());
   const [invoices, setInvoices] = useState<InvoiceRecord[]>(() => loadInvoices());
+  const [entries, setEntries] = useState<ProductEntry[]>(() => loadEntries());
   const [exits, setExits] = useState<ProductExit[]>(() => loadExits());
   const [productReturns, setProductReturns] = useState<ProductReturn[]>(() => loadReturns());
   const [productForm, setProductForm] = useState<ProductForm>(emptyForm);
@@ -200,6 +230,11 @@ function App() {
   const [exitLines, setExitLines] = useState<ExitLineDraft[]>([]);
   const [exitStatus, setExitStatus] = useState("");
   const [printableExit, setPrintableExit] = useState<ProductExit[]>([]);
+  const [entryForm, setEntryForm] = useState<EntryForm>(() => emptyEntryForm());
+  const [entryLines, setEntryLines] = useState<EntryLineDraft[]>([]);
+  const [entryStatus, setEntryStatus] = useState("");
+  const [printableEntry, setPrintableEntry] = useState<ProductEntry[]>([]);
+  const [entryHistoryQuery, setEntryHistoryQuery] = useState("");
   const [returnForm, setReturnForm] = useState<ReturnForm>(() => emptyReturnForm());
   const [returnStatus, setReturnStatus] = useState("");
   const [printableReturn, setPrintableReturn] = useState<ProductReturn | null>(null);
@@ -220,11 +255,12 @@ function App() {
   const initialSnapshotRef = useRef<InventorySnapshot | null>(null);
 
   if (!initialSnapshotRef.current) {
-    initialSnapshotRef.current = createSnapshot(products, invoices, exits, productReturns);
+    initialSnapshotRef.current = createSnapshot(products, invoices, entries, exits, productReturns);
   }
 
   useEffect(() => saveProducts(products), [products]);
   useEffect(() => saveInvoices(invoices), [invoices]);
+  useEffect(() => saveEntries(entries), [entries]);
   useEffect(() => saveExits(exits), [exits]);
   useEffect(() => saveReturns(productReturns), [productReturns]);
 
@@ -240,7 +276,7 @@ function App() {
         }
 
         if (hasSnapshotData(snapshot)) {
-          const localSnapshot = initialSnapshotRef.current || createSnapshot(products, invoices, exits, productReturns);
+          const localSnapshot = initialSnapshotRef.current || createSnapshot(products, invoices, entries, exits, productReturns);
           const mergedSnapshot = mergeStartupSnapshot(snapshot, localSnapshot);
           applySnapshot(mergedSnapshot);
           setImportStatus(`Inventario sincronizado en nube${formatCloudDate(snapshot.updatedAt)}.`);
@@ -266,7 +302,7 @@ function App() {
   useEffect(() => {
     if (!cloudReady) return;
 
-    const snapshot = createSnapshot(products, invoices, exits, productReturns);
+    const snapshot = createSnapshot(products, invoices, entries, exits, productReturns);
     const handle = window.setTimeout(() => {
       setCloudStatus("Guardando en nube...");
       saveCloudSnapshot(snapshot)
@@ -275,7 +311,7 @@ function App() {
     }, 900);
 
     return () => window.clearTimeout(handle);
-  }, [cloudReady, products, invoices, exits, productReturns]);
+  }, [cloudReady, products, invoices, entries, exits, productReturns]);
   useEffect(() => {
     if (loadProducts().length > 0) return;
 
@@ -343,6 +379,24 @@ function App() {
   );
   const stagedExitQuantity = resolvedExitLines.reduce((sum, line) => sum + line.quantity, 0);
   const knownClients = useMemo(() => buildClientOptions(exits), [exits]);
+  const selectedEntryProduct = useMemo(
+    () => matchProductForExit(products, entryForm.sku).product,
+    [products, entryForm.sku]
+  );
+  const resolvedEntryLines = useMemo(
+    () =>
+      entryLines.map((line) => ({
+        ...line,
+        product: findProductForSku(products, line.sku)
+      })),
+    [entryLines, products]
+  );
+  const stagedEntryQuantity = resolvedEntryLines.reduce((sum, line) => sum + line.quantity, 0);
+  const knownSuppliers = useMemo(() => buildSupplierOptions(entries, products), [entries, products]);
+  const filteredHistoryEntries = useMemo(
+    () => filterEntryHistory(entries, entryHistoryQuery).slice(0, 80),
+    [entries, entryHistoryQuery]
+  );
   const filteredHistoryExits = useMemo(
     () => filterExitHistory(exits, historyQuery).slice(0, 80),
     [exits, historyQuery]
@@ -384,6 +438,7 @@ function App() {
   function applySnapshot(snapshot: InventorySnapshot) {
     setProducts(snapshot.products);
     setInvoices(snapshot.invoices);
+    setEntries(snapshot.entries);
     setExits(snapshot.exits);
     setProductReturns(snapshot.productReturns);
   }
@@ -396,6 +451,10 @@ function App() {
     setExitLines([]);
     setExitStatus("");
     setPrintableExit([]);
+    setEntryForm(emptyEntryForm());
+    setEntryLines([]);
+    setEntryStatus("");
+    setPrintableEntry([]);
     setReturnForm(emptyReturnForm());
     setReturnStatus("");
     setPrintableReturn(null);
@@ -409,7 +468,7 @@ function App() {
         setImportStatus("Datos de este navegador limpiados. Inventario de nube recargado.");
         setCloudStatus(`Sincronizado en nube${formatCloudDate(snapshot.updatedAt)}.`);
       } else {
-        applySnapshot(createSnapshot([], [], [], []));
+        applySnapshot(createSnapshot([], [], [], [], []));
         setImportStatus("Datos de este navegador limpiados.");
         setCloudStatus("Nube lista. Al importar, quedara disponible para todos.");
       }
@@ -481,22 +540,6 @@ function App() {
 
   function deleteProduct(id: string) {
     setProducts((current) => current.filter((product) => product.id !== id));
-  }
-
-  function adjustStock(product: Product, delta: number) {
-    setProducts((current) =>
-      current.map((item) =>
-        item.id === product.id
-          ? {
-              ...item,
-              stock: Math.max(0, item.stock + delta),
-              entries: delta > 0 ? (item.entries || 0) + delta : item.entries || 0,
-              exits: delta < 0 ? (item.exits || 0) + Math.abs(delta) : item.exits || 0,
-              updatedAt: new Date().toISOString()
-            }
-          : item
-      )
-    );
   }
 
   function startExit(product: Product) {
@@ -698,6 +741,160 @@ function App() {
     }
     setPrintableExit(records);
     setPrintView("exit");
+    window.setTimeout(() => window.print(), 80);
+  }
+
+  function startEntry(product: Product) {
+    setEntryForm({
+      ...emptyEntryForm(),
+      sku: product.sku,
+      quantity: "1",
+      supplier: product.supplier || "",
+      reference: ""
+    });
+    setEntryLines([{ id: createId("lin"), sku: product.sku, quantity: 1 }]);
+    setEntryStatus("");
+    setView("entries");
+  }
+
+  function addEntryLine() {
+    const match = matchProductForExit(products, entryForm.sku);
+    const product = match.product;
+    const quantity = toNumber(entryForm.quantity);
+
+    if (!product) {
+      setEntryStatus(
+        match.count > 1
+          ? "Hay varias coincidencias. Escribe la referencia completa para agregar el item."
+          : "No encontre una referencia con ese codigo."
+      );
+      return;
+    }
+
+    if (!quantity || quantity <= 0) {
+      setEntryStatus("La cantidad debe ser mayor que cero.");
+      return;
+    }
+
+    setEntryLines((current) => {
+      const cleanSku = normalizeSku(product.sku);
+      const existing = current.find((line) => normalizeSku(line.sku) === cleanSku);
+      if (existing) {
+        return current.map((line) =>
+          normalizeSku(line.sku) === cleanSku ? { ...line, quantity: line.quantity + quantity } : line
+        );
+      }
+      return [...current, { id: createId("lin"), sku: product.sku, quantity }];
+    });
+    setEntryForm((current) => ({ ...current, sku: "", quantity: "1" }));
+    setEntryStatus(`Item agregado: ${product.sku} x ${quantity}.`);
+  }
+
+  function handleEntryItemKeyDown(event: KeyboardEvent<HTMLInputElement>) {
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    addEntryLine();
+  }
+
+  function removeEntryLine(id: string) {
+    setEntryLines((current) => current.filter((line) => line.id !== id));
+  }
+
+  function registerEntry(event: FormEvent) {
+    event.preventDefault();
+    const draftLines =
+      entryLines.length > 0
+        ? entryLines
+        : entryForm.sku.trim()
+          ? [{ id: createId("lin"), sku: entryForm.sku, quantity: toNumber(entryForm.quantity) }]
+          : [];
+
+    if (!entryForm.supplier.trim()) {
+      setEntryStatus("Escribe el proveedor para registrar la entrada.");
+      return;
+    }
+
+    if (!draftLines.length) {
+      setEntryStatus("Agrega al menos un item a la entrada.");
+      return;
+    }
+
+    const preparedLines = draftLines.map((line) => ({
+      ...line,
+      quantity: toNumber(line.quantity),
+      product: findProductForSku(products, line.sku)
+    }));
+    const missingLine = preparedLines.find((line) => !line.product);
+    if (missingLine) {
+      setEntryStatus(`No encontre la referencia ${missingLine.sku}.`);
+      return;
+    }
+
+    const invalidLine = preparedLines.find((line) => !line.quantity || line.quantity <= 0);
+    if (invalidLine) {
+      setEntryStatus("Todas las cantidades deben ser mayores que cero.");
+      return;
+    }
+
+    const validLines = preparedLines.filter(
+      (line): line is (typeof preparedLines)[number] & { product: Product } => Boolean(line.product)
+    );
+    const totals = new Map<string, { product: Product; quantity: number }>();
+    for (const line of validLines) {
+      const current = totals.get(line.product.id) || { product: line.product, quantity: 0 };
+      current.quantity += line.quantity;
+      totals.set(line.product.id, current);
+    }
+
+    const now = new Date().toISOString();
+    const batchId = createId("entrada");
+    const date = entryForm.date || now.slice(0, 10);
+    const reference = entryForm.reference.trim() || `Entrada ${date}`;
+    const records: ProductEntry[] = validLines.map((line) => ({
+      id: createId("ent"),
+      batchId,
+      date,
+      sku: line.product.sku,
+      productId: line.product.id,
+      productName: line.product.name,
+      brand: line.product.brand,
+      location: line.product.location,
+      quantity: line.quantity,
+      supplier: entryForm.supplier.trim(),
+      reference,
+      unitCost: line.product.unitCost,
+      notes: entryForm.notes.trim(),
+      createdAt: now
+    }));
+
+    setProducts((current) =>
+      current.map((item) => {
+        const incoming = totals.get(item.id)?.quantity || 0;
+        return incoming
+          ? {
+              ...item,
+              stock: item.stock + incoming,
+              entries: (item.entries || 0) + incoming,
+              supplier: entryForm.supplier.trim() || item.supplier,
+              updatedAt: now
+            }
+          : item;
+      })
+    );
+    setEntries((current) => [...records, ...current]);
+    setPrintableEntry(records);
+    setEntryForm(emptyEntryForm());
+    setEntryLines([]);
+    setEntryStatus(`Entrada registrada con ${records.length} item${records.length === 1 ? "" : "s"}. PDF listo para imprimir.`);
+  }
+
+  function printEntryReceipt(records = printableEntry) {
+    if (!records.length) {
+      setEntryStatus("Primero registra una entrada para imprimir el PDF.");
+      return;
+    }
+    setPrintableEntry(records);
+    setPrintView("entry");
     window.setTimeout(() => window.print(), 80);
   }
 
@@ -1142,9 +1339,11 @@ function App() {
         {view === "dashboard" && (
           <Dashboard
             products={products}
+            entries={entries}
             exits={exits}
             stats={stats}
             onEditProduct={editProduct}
+            onOpenEntries={() => setView("entries")}
             onOpenExits={() => setView("exits")}
             onPrintNoStock={printNoStockReport}
           />
@@ -1296,14 +1495,233 @@ function App() {
                   <ProductCard
                     key={product.id}
                     product={product}
-                    onAdjust={adjustStock}
                     onDelete={deleteProduct}
                     onEdit={editProduct}
+                    onEntry={startEntry}
                     onExit={startExit}
                   />
                 ))}
                 {!filteredProducts.length && <EmptyState label="Sin productos en esta vista." />}
               </div>
+            </section>
+          </section>
+        )}
+
+        {view === "entries" && (
+          <section className="content-grid two-columns">
+            <form className="tool-panel product-form" onSubmit={registerEntry}>
+              <div className="panel-title">
+                <Download size={18} />
+                <h2>Entrada de proveedor</h2>
+              </div>
+              <div className="form-row">
+                <label>
+                  Fecha
+                  <input
+                    type="date"
+                    value={entryForm.date}
+                    onChange={(event) => setEntryForm({ ...entryForm, date: event.target.value })}
+                  />
+                </label>
+                <label>
+                  Proveedor
+                  <input
+                    list="supplier-name-list"
+                    value={entryForm.supplier}
+                    onChange={(event) => setEntryForm({ ...entryForm, supplier: event.target.value })}
+                    placeholder="Nombre del proveedor"
+                  />
+                </label>
+              </div>
+              <datalist id="supplier-name-list">
+                {knownSuppliers.map((supplier) => (
+                  <option key={supplier} value={supplier} />
+                ))}
+              </datalist>
+              <label>
+                Referencia de entrada
+                <input
+                  value={entryForm.reference}
+                  onChange={(event) => setEntryForm({ ...entryForm, reference: event.target.value })}
+                  placeholder="Factura, remision, orden de compra o referencia"
+                />
+              </label>
+              <label>
+                Nota
+                <textarea
+                  value={entryForm.notes}
+                  onChange={(event) => setEntryForm({ ...entryForm, notes: event.target.value })}
+                  placeholder="Detalle opcional"
+                />
+              </label>
+
+              <div className="line-builder">
+                <div className="panel-title compact">
+                  <PackagePlus size={17} />
+                  <h3>Agregar item</h3>
+                </div>
+                <div className="form-row">
+                  <label>
+                    Referencia
+                    <input
+                      list="product-ref-list-entry"
+                      value={entryForm.sku}
+                      onChange={(event) => setEntryForm({ ...entryForm, sku: event.target.value })}
+                      onKeyDown={handleEntryItemKeyDown}
+                      placeholder="Buscar o escribir referencia"
+                    />
+                  </label>
+                  <label>
+                    Cantidad
+                    <input
+                      min="1"
+                      type="number"
+                      value={entryForm.quantity}
+                      onChange={(event) => setEntryForm({ ...entryForm, quantity: event.target.value })}
+                      onKeyDown={handleEntryItemKeyDown}
+                    />
+                  </label>
+                </div>
+                <datalist id="product-ref-list-entry">
+                  {products.map((product) => (
+                    <option key={product.id} value={product.sku}>
+                      {product.name}
+                    </option>
+                  ))}
+                </datalist>
+                {selectedEntryProduct ? (
+                  <div className="selected-product">
+                    <strong>{selectedEntryProduct.name}</strong>
+                    <span>Marca: {selectedEntryProduct.brand || "-"}</span>
+                    <span>Ubicacion: {selectedEntryProduct.location || "-"}</span>
+                    <span>Stock actual: {selectedEntryProduct.stock}</span>
+                  </div>
+                ) : (
+                  <div className="selected-product muted">
+                    Escribe una referencia existente para sumar unidades a su stock.
+                  </div>
+                )}
+                <button className="secondary-button full" onClick={addEntryLine} type="button">
+                  <Plus size={17} />
+                  Agregar item a la entrada
+                </button>
+              </div>
+
+              {entryStatus && <p className="status-line">{entryStatus}</p>}
+
+              <div className="exit-lines">
+                <div className="exit-lines-header">
+                  <span>
+                    {resolvedEntryLines.length
+                      ? `${resolvedEntryLines.length} item${resolvedEntryLines.length === 1 ? "" : "s"} listos`
+                      : "Sin items agregados"}
+                  </span>
+                  <strong>Total: {stagedEntryQuantity}</strong>
+                </div>
+                {resolvedEntryLines.length ? (
+                  <div className="exit-line-list">
+                    {resolvedEntryLines.map((line) => (
+                      <div className={line.product ? "exit-line" : "exit-line missing"} key={line.id}>
+                        <div className="exit-line-main">
+                          <strong>{line.product?.name || "Referencia no encontrada"}</strong>
+                          <span>
+                            {line.product?.sku || line.sku}
+                            {line.product?.location ? ` - ${line.product.location}` : ""}
+                          </span>
+                        </div>
+                        <div className="exit-line-stock">
+                          <span>Stock</span>
+                          <strong>{line.product?.stock ?? "-"}</strong>
+                        </div>
+                        <div className="exit-line-quantity">
+                          <span>Cant.</span>
+                          <strong>{line.quantity}</strong>
+                        </div>
+                        <button
+                          className="icon-button danger"
+                          onClick={() => removeEntryLine(line.id)}
+                          title="Quitar item"
+                          type="button"
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <EmptyState label="Agrega cada producto que llega del proveedor." />
+                )}
+              </div>
+
+              <button className="primary-button full" type="submit">
+                <Check size={17} />
+                Registrar entrada completa
+              </button>
+              {printableEntry.length > 0 && (
+                <div className="receipt-ready">
+                  <div>
+                    <strong>Comprobante listo</strong>
+                    <span>
+                      {printableEntry[0]?.reference} - {printableEntry[0]?.supplier}
+                    </span>
+                  </div>
+                  <button className="secondary-button" onClick={() => printEntryReceipt()} type="button">
+                    <Printer size={17} />
+                    Imprimir PDF
+                  </button>
+                </div>
+              )}
+            </form>
+
+            <section className="review-panel">
+              <div className="panel-title">
+                <FileText size={18} />
+                <h2>Historial de entradas</h2>
+              </div>
+              <div className="searchbar">
+                <Search size={18} />
+                <input
+                  list="supplier-name-list"
+                  value={entryHistoryQuery}
+                  onChange={(event) => setEntryHistoryQuery(event.target.value)}
+                  placeholder="Buscar proveedor, producto, ref o entrada"
+                />
+              </div>
+
+              {entries.length ? (
+                filteredHistoryEntries.length ? (
+                  <div className="table-wrap">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>Fecha</th>
+                          <th>Entrada</th>
+                          <th>Ref</th>
+                          <th>Producto</th>
+                          <th>Proveedor</th>
+                          <th>Cant.</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {filteredHistoryEntries.map((entry) => (
+                          <tr key={entry.id}>
+                            <td>{entry.date}</td>
+                            <td>{entry.reference}</td>
+                            <td>{entry.sku}</td>
+                            <td>{entry.productName}</td>
+                            <td>{entry.supplier}</td>
+                            <td>{entry.quantity}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <EmptyState label="No hay entradas que coincidan con esa busqueda." />
+                )
+              ) : (
+                <EmptyState label="Aun no hay entradas registradas." />
+              )}
             </section>
           </section>
         )}
@@ -2013,6 +2431,7 @@ function App() {
       </main>
     </div>
     <PrintReceipt active={printView === "exit"} records={printableExit} />
+    <PrintEntryReceipt active={printView === "entry"} records={printableEntry} />
     <PrintNoStockReport active={printView === "no-stock"} products={stats.lowStock} />
     <PrintReturnAct active={printView === "return"} record={printableReturn} />
     </>
@@ -2097,6 +2516,91 @@ function PrintReceipt({ active, records }: { active: boolean; records: ProductEx
         </div>
         <div>
           <span>Recibe</span>
+        </div>
+        <p>Generado: {createdAt.toLocaleString("es-CO")}</p>
+      </footer>
+    </section>
+  );
+}
+
+function PrintEntryReceipt({ active, records }: { active: boolean; records: ProductEntry[] }) {
+  if (!records.length) return <section className="print-document" aria-hidden="true" />;
+
+  const first = records[0];
+  const totalQuantity = records.reduce((sum, item) => sum + item.quantity, 0);
+  const createdAt = first.createdAt ? new Date(first.createdAt) : new Date();
+
+  return (
+    <section className={active ? "print-document active-print" : "print-document"} aria-hidden="true">
+      <header className="print-header">
+        <div className="print-brand">
+          <img src="/assets/yota-logo.png" alt="YOTA Montacargas" />
+          <div>
+            <strong>YOTA Montacargas</strong>
+            <span>Comprobante de entrada de inventario</span>
+          </div>
+        </div>
+        <div className="print-stamp">
+          <span>Entrada</span>
+          <strong>{first.reference}</strong>
+        </div>
+      </header>
+
+      <section className="print-meta">
+        <div>
+          <span>Fecha</span>
+          <strong>{first.date}</strong>
+        </div>
+        <div>
+          <span>Proveedor</span>
+          <strong>{first.supplier}</strong>
+        </div>
+        <div>
+          <span>Items</span>
+          <strong>{records.length}</strong>
+        </div>
+        <div>
+          <span>Total unidades</span>
+          <strong>{totalQuantity}</strong>
+        </div>
+      </section>
+
+      <table className="print-table">
+        <thead>
+          <tr>
+            <th>Ref.</th>
+            <th>Producto</th>
+            <th>Marca</th>
+            <th>Ubicacion</th>
+            <th>Cant.</th>
+          </tr>
+        </thead>
+        <tbody>
+          {records.map((item) => (
+            <tr key={item.id}>
+              <td>{item.sku}</td>
+              <td>{item.productName}</td>
+              <td>{item.brand || "-"}</td>
+              <td>{item.location || "-"}</td>
+              <td>{item.quantity}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+
+      {first.notes && (
+        <section className="print-notes">
+          <span>Nota</span>
+          <p>{first.notes}</p>
+        </section>
+      )}
+
+      <footer className="print-footer">
+        <div>
+          <span>Entrega proveedor</span>
+        </div>
+        <div>
+          <span>Recibe bodega</span>
         </div>
         <p>Generado: {createdAt.toLocaleString("es-CO")}</p>
       </footer>
@@ -2279,13 +2783,16 @@ function PrintReturnAct({ active, record }: { active: boolean; record: ProductRe
 
 function Dashboard({
   products,
+  entries,
   exits,
   stats,
   onEditProduct,
+  onOpenEntries,
   onOpenExits,
   onPrintNoStock
 }: {
   products: Product[];
+  entries: ProductEntry[];
   exits: ProductExit[];
   stats: {
     units: number;
@@ -2296,6 +2803,7 @@ function Dashboard({
     rotation: RotationDashboard;
   };
   onEditProduct: (product: Product) => void;
+  onOpenEntries: () => void;
   onOpenExits: () => void;
   onPrintNoStock: () => void;
 }) {
@@ -2356,6 +2864,31 @@ function Dashboard({
           </div>
         </div>
 
+        <div className="review-panel">
+          <div className="panel-title">
+            <Download size={18} />
+            <h2>Ultimas entradas</h2>
+          </div>
+          <div className="invoice-list">
+            {entries.slice(0, 7).map((entry) => (
+              <div className="invoice-row" key={entry.id}>
+                <span>
+                  {entry.date} · {entry.sku} · {entry.supplier}
+                </span>
+                <strong>+{entry.quantity}</strong>
+              </div>
+            ))}
+            {!entries.length && (
+              <button className="empty-action" onClick={onOpenEntries} type="button">
+                <Download size={18} />
+                Registrar primera entrada
+              </button>
+            )}
+          </div>
+        </div>
+      </section>
+
+      <section className="content-grid two-columns smart-row">
         <div className="review-panel">
           <div className="panel-title">
             <ClipboardList size={18} />
@@ -2433,15 +2966,15 @@ function RotationRow({
 
 function ProductCard({
   product,
-  onAdjust,
   onDelete,
   onEdit,
+  onEntry,
   onExit
 }: {
   product: Product;
-  onAdjust: (product: Product, delta: number) => void;
   onDelete: (id: string) => void;
   onEdit: (product: Product) => void;
+  onEntry: (product: Product) => void;
   onExit: (product: Product) => void;
 }) {
   const low = product.stock <= 0;
@@ -2470,11 +3003,11 @@ function ProductCard({
         </div>
       </div>
       <div className="card-actions">
+        <button className="secondary-button tiny" onClick={() => onEntry(product)} type="button">
+          Entrada
+        </button>
         <button className="secondary-button tiny" onClick={() => onExit(product)} type="button">
           Salida
-        </button>
-        <button className="icon-button" onClick={() => onAdjust(product, 1)} title="Registrar entrada" type="button">
-          <Plus size={16} />
         </button>
         <button className="secondary-button tiny" onClick={() => onEdit(product)} type="button">
           Editar
@@ -2495,6 +3028,7 @@ function titleForView(view: View) {
   const titles: Record<View, string> = {
     dashboard: "Panel de control",
     products: "Repuestos",
+    entries: "Entradas",
     exits: "Salidas",
     returns: "Cambios y devoluciones",
     invoices: "Facturas y fotos",
@@ -2506,10 +3040,11 @@ function titleForView(view: View) {
 function createSnapshot(
   products: Product[],
   invoices: InvoiceRecord[],
+  entries: ProductEntry[],
   exits: ProductExit[],
   productReturns: ProductReturn[]
 ): InventorySnapshot {
-  return { products, invoices, exits, productReturns };
+  return { products, invoices, entries, exits, productReturns };
 }
 
 function hasSnapshotData(snapshot: InventorySnapshot | null | undefined) {
@@ -2517,6 +3052,7 @@ function hasSnapshotData(snapshot: InventorySnapshot | null | undefined) {
     snapshot &&
       (snapshot.products.length ||
         snapshot.invoices.length ||
+        snapshot.entries.length ||
         snapshot.exits.length ||
         snapshot.productReturns.length)
   );
@@ -2529,6 +3065,7 @@ function mergeStartupSnapshot(cloud: InventorySnapshot, local: InventorySnapshot
       ? mergeSnapshotProducts(cloud.products, local.products)
       : mergeSnapshotProducts(local.products, cloud.products),
     invoices: mergeById(cloud.invoices, local.invoices),
+    entries: mergeById(cloud.entries, local.entries),
     exits: mergeById(cloud.exits, local.exits),
     productReturns: mergeById(cloud.productReturns, local.productReturns),
     updatedAt: cloud.updatedAt || local.updatedAt || null
@@ -2536,7 +3073,12 @@ function mergeStartupSnapshot(cloud: InventorySnapshot, local: InventorySnapshot
 }
 
 function hasSnapshotMovements(snapshot: InventorySnapshot) {
-  return Boolean(snapshot.invoices.length || snapshot.exits.length || snapshot.productReturns.length);
+  return Boolean(
+    snapshot.invoices.length ||
+      snapshot.entries.length ||
+      snapshot.exits.length ||
+      snapshot.productReturns.length
+  );
 }
 
 function mergeSnapshotProducts(primary: Product[], secondary: Product[]) {
@@ -2599,6 +3141,43 @@ function filterExitHistory(exits: ProductExit[], query: string) {
   const sortedExits = [...exits].sort((a, b) => exitTimestamp(b) - exitTimestamp(a));
   if (!cleanQuery) return sortedExits;
   return sortedExits.filter((exit) => normalizeHeader(historySearchText(exit)).includes(cleanQuery));
+}
+
+function buildSupplierOptions(entries: ProductEntry[], products: Product[]) {
+  const suppliers = new Map<string, string>();
+  const register = (value: string | undefined) => {
+    const clean = (value || "").trim();
+    if (!clean) return;
+    const key = normalizeHeader(clean);
+    if (!suppliers.has(key)) suppliers.set(key, clean);
+  };
+  for (const entry of entries) register(entry.supplier);
+  for (const product of products) register(product.supplier);
+  return Array.from(suppliers.values()).sort((a, b) => a.localeCompare(b, "es"));
+}
+
+function filterEntryHistory(entries: ProductEntry[], query: string) {
+  const cleanQuery = normalizeHeader(query);
+  const sortedEntries = [...entries].sort((a, b) => entryTimestamp(b) - entryTimestamp(a));
+  if (!cleanQuery) return sortedEntries;
+  return sortedEntries.filter((entry) => normalizeHeader(entryHistorySearchText(entry)).includes(cleanQuery));
+}
+
+function entryHistorySearchText(entry: ProductEntry) {
+  return [
+    entry.supplier,
+    entry.reference,
+    entry.sku,
+    entry.productName,
+    entry.brand,
+    entry.location,
+    entry.date,
+    entry.notes
+  ].join(" ");
+}
+
+function entryTimestamp(entry: ProductEntry) {
+  return Date.parse(entry.createdAt || entry.date) || Date.parse(entry.date) || 0;
 }
 
 function buildClientProductHistory(

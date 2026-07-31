@@ -68,6 +68,23 @@ export type ProductExit = {
   createdAt: string;
 };
 
+export type ProductEntry = {
+  id: string;
+  batchId?: string;
+  date: string;
+  sku: string;
+  productId?: string;
+  productName: string;
+  brand?: string;
+  location?: string;
+  quantity: number;
+  supplier: string;
+  reference: string;
+  unitCost?: number;
+  notes?: string;
+  createdAt: string;
+};
+
 export type ReturnType = "devolucion" | "cambio" | "garantia";
 
 export type ReturnCondition = "bueno" | "revision" | "garantia" | "danado";
