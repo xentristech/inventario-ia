@@ -392,7 +392,7 @@ function App() {
     [entryLines, products]
   );
   const stagedEntryQuantity = resolvedEntryLines.reduce((sum, line) => sum + line.quantity, 0);
-  const knownSuppliers = useMemo(() => buildSupplierOptions(entries, products), [entries, products]);
+  const knownSuppliers = useMemo(() => buildSupplierOptions(entries), [entries]);
   const filteredHistoryEntries = useMemo(
     () => filterEntryHistory(entries, entryHistoryQuery).slice(0, 80),
     [entries, entryHistoryQuery]
@@ -3143,16 +3143,14 @@ function filterExitHistory(exits: ProductExit[], query: string) {
   return sortedExits.filter((exit) => normalizeHeader(historySearchText(exit)).includes(cleanQuery));
 }
 
-function buildSupplierOptions(entries: ProductEntry[], products: Product[]) {
+function buildSupplierOptions(entries: ProductEntry[]) {
   const suppliers = new Map<string, string>();
-  const register = (value: string | undefined) => {
-    const clean = (value || "").trim();
-    if (!clean) return;
+  for (const entry of entries) {
+    const clean = (entry.supplier || "").trim();
+    if (!clean) continue;
     const key = normalizeHeader(clean);
     if (!suppliers.has(key)) suppliers.set(key, clean);
-  };
-  for (const entry of entries) register(entry.supplier);
-  for (const product of products) register(product.supplier);
+  }
   return Array.from(suppliers.values()).sort((a, b) => a.localeCompare(b, "es"));
 }
 
