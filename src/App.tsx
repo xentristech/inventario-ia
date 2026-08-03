@@ -22,6 +22,7 @@ import {
   X
 } from "lucide-react";
 import Papa from "papaparse";
+import writeXlsxFile from "write-excel-file/browser";
 import { ChangeEvent, FormEvent, KeyboardEvent, useEffect, useMemo, useState } from "react";
 import { sampleProducts } from "./sampleData";
 import {
@@ -499,12 +500,126 @@ function App() {
 
     if (!product.name) return;
 
+    if (productForm.id) {
+      const previous = products.find((item) => item.id === product.id);
+      const delta = previous ? product.stock - previous.stock : 0;
+      if (previous && delta !== 0) {
+        const date = now.slice(0, 10);
+        if (delta > 0) {
+          product.entries = (product.entries || 0) + delta;
+          const record: ProductEntry = {
+            id: createId("ent"),
+            batchId: createId("entrada"),
+            date,
+            sku: product.sku,
+            productId: product.id,
+            productName: product.name,
+            brand: product.brand,
+            location: product.location,
+            quantity: delta,
+            supplier: "AJUSTE",
+            reference: `Ajuste manual ${date}`,
+            notes: `Stock corregido de ${previous.stock} a ${product.stock}`,
+            createdAt: now
+          };
+          setEntries((current) => [record, ...current]);
+        } else {
+          product.exits = (product.exits || 0) - delta;
+          const record: ProductExit = {
+            id: createId("sal"),
+            batchId: createId("salida"),
+            date,
+            sku: product.sku,
+            productId: product.id,
+            productName: product.name,
+            brand: product.brand,
+            location: product.location,
+            quantity: -delta,
+            client: "AJUSTE",
+            reference: `Ajuste manual ${date}`,
+            notes: `Stock corregido de ${previous.stock} a ${product.stock}`,
+            createdAt: now
+          };
+          setExits((current) => [record, ...current]);
+        }
+      }
+    }
+
     setProducts((current) =>
       productForm.id
         ? current.map((item) => (item.id === product.id ? product : item))
         : [product, ...current]
     );
     setProductForm(emptyForm);
+  }
+
+  async function exportInventoryExcel() {
+    const bold = { fontWeight: "bold" as const };
+    const cell = (value: string) => ({ value, type: String });
+    const numCell = (value: number) => ({ value, type: Number });
+    const headerRow = (labels: string[]) => labels.map((label) => ({ ...cell(label), ...bold }));
+
+    const byDate = <T extends { date: string; createdAt: string }>(a: T, b: T) =>
+      a.date.localeCompare(b.date) || a.createdAt.localeCompare(b.createdAt);
+
+    const inventorySheet = [
+      headerRow([
+        "CODIGO DE REFERENCIA",
+        "NOMBRE DEL PRODUCTO",
+        "MARCA",
+        "MOTOR",
+        "CRUZA",
+        "REF. CLIENTE",
+        "UBICACION",
+        "CANTIDAD INICIAL",
+        "TOTAL ENTRADAS",
+        "TOTAL SALIDAS",
+        "STOCK ACTUAL"
+      ]),
+      ...products.map((product) => [
+        cell(product.sku),
+        cell(product.name),
+        cell(product.brand || ""),
+        cell(product.motor || ""),
+        cell(product.crossRef || ""),
+        cell(product.customerRef || ""),
+        cell(product.location || ""),
+        numCell(product.initialStock || 0),
+        numCell(product.entries || 0),
+        numCell(product.exits || 0),
+        numCell(product.stock)
+      ])
+    ];
+
+    const entriesSheet = [
+      headerRow(["Fecha", "Proveedor", "Codigo de Referencia", "Descripcion", "Cantidad", "Referencia"]),
+      ...[...entries].sort(byDate).map((entry) => [
+        cell(entry.date),
+        cell(entry.supplier),
+        cell(entry.sku),
+        cell(entry.productName),
+        numCell(entry.quantity),
+        cell(entry.reference)
+      ])
+    ];
+
+    const exitsSheet = [
+      headerRow(["Fecha", "Codigo de Referencia", "Cliente", "Descripcion", "Cantidad", "Referencia"]),
+      ...[...exits].sort(byDate).map((exit) => [
+        cell(exit.date),
+        cell(exit.sku),
+        cell(exit.client),
+        cell(exit.productName),
+        numCell(exit.quantity),
+        cell(exit.reference)
+      ])
+    ];
+
+    await writeXlsxFile([
+      { sheet: "Inventario", data: inventorySheet },
+      { sheet: "Entradas", data: entriesSheet },
+      { sheet: "Salidas", data: exitsSheet }
+    ]).toFile(`Inventario_YOTA_${new Date().toISOString().slice(0, 10)}.xlsx`);
   }
 
   function editProduct(product: Product) {
@@ -1310,6 +1425,10 @@ function App() {
             <span className="cloud-status">{cloudStatus}</span>
           </div>
           <div className="topbar-actions">
+            <button className="secondary-button" onClick={exportInventoryExcel} type="button">
+              <FileSpreadsheet size={17} />
+              Exportar
+            </button>
             <button className="secondary-button" onClick={() => setView("invoices")} type="button">
               <Camera size={17} />
               Factura
