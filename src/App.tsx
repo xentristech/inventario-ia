@@ -264,6 +264,7 @@ function App() {
   const [invoiceStatus, setInvoiceStatus] = useState("");
   const [extracting, setExtracting] = useState(false);
   const [manualLines, setManualLines] = useState("");
+  const [invoiceApplyArmed, setInvoiceApplyArmed] = useState(false);
   const [sheetUrl, setSheetUrl] = useState("");
   const [importRows, setImportRows] = useState<ImportRow[]>([]);
   const [importStatus, setImportStatus] = useState("");
@@ -389,6 +390,12 @@ function App() {
     () => pageSlice(filteredProducts, productPage, PRODUCT_PAGE_SIZE),
     [filteredProducts, productPage]
   );
+  const draftMatches = useMemo(
+    () => (invoiceDraft ? invoiceDraft.items.map((item) => findInvoiceItemMatch(products, item.sku)) : []),
+    [invoiceDraft, products]
+  );
+
+  useEffect(() => setInvoiceApplyArmed(false), [invoiceDraft]);
 
   useEffect(() => setProductPage(0), [query]);
   useEffect(() => setEntryPage(0), [entryHistoryQuery, entryFilters, entryGrouped]);
@@ -1587,8 +1594,13 @@ function App() {
         setInvoiceStatus("El servidor devolvio una respuesta invalida. Intenta de nuevo.");
         return;
       }
-      setInvoiceDraft(payload as InvoiceExtraction);
-      setInvoiceStatus("Factura lista para revisar.");
+      const prepared = prepareInvoiceDraft(payload as InvoiceExtraction);
+      setInvoiceDraft(prepared);
+      setInvoiceStatus(
+        isTvhInvoice(prepared)
+          ? "Factura TVH lista: se quitaron las letras de los seriales. Revisa la columna Estado."
+          : "Factura lista para revisar."
+      );
     } catch {
       setInvoiceStatus("No se pudo conectar con el servidor. Revisa tu conexion e intenta de nuevo.");
     } finally {
@@ -1637,6 +1649,16 @@ function App() {
 
   function applyInvoice() {
     if (!invoiceDraft || !invoiceDraft.items.length) return;
+
+    const relatedCount = draftMatches.filter((match) => match.kind === "relacionado").length;
+    if (relatedCount && !invoiceApplyArmed) {
+      setInvoiceApplyArmed(true);
+      setInvoiceStatus(
+        `Atencion: ${relatedCount} codigo${relatedCount === 1 ? "" : "s"} ya existe${relatedCount === 1 ? "" : "n"} en inventario con otras letras (columna Estado). Usa "Usar" para vincularlos, o pulsa "Sumar al inventario" otra vez para crearlos como nuevos.`
+      );
+      return;
+    }
+
     const now = new Date().toISOString();
     const record: InvoiceRecord = {
       ...invoiceDraft,
@@ -3375,6 +3397,7 @@ function App() {
                           <th>Producto</th>
                           <th>Cant.</th>
                           <th>Costo</th>
+                          <th>Estado</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -3413,6 +3436,30 @@ function App() {
                                   updateDraftItem(index, { unitCost: toNumber(event.target.value) })
                                 }
                               />
+                            </td>
+                            <td className="one-line">
+                              {draftMatches[index]?.kind === "exacto" ? (
+                                <span className="pill">Suma a {draftMatches[index].product?.sku}</span>
+                              ) : draftMatches[index]?.kind === "relacionado" ? (
+                                <>
+                                  <span className="pill warn">Existe como {draftMatches[index].product?.sku}</span>
+                                  <button
+                                    className="secondary-button tiny"
+                                    onClick={() =>
+                                      updateDraftItem(index, { sku: draftMatches[index].product?.sku || item.sku })
+                                    }
+                                    type="button"
+                                  >
+                                    Usar
+                                  </button>
+                                </>
+                              ) : (
+                                <input
+                                  placeholder="Ubicacion (nuevo)"
+                                  value={item.location || ""}
+                                  onChange={(event) => updateDraftItem(index, { location: event.target.value })}
+                                />
+                              )}
                             </td>
                           </tr>
                         ))}
@@ -4320,6 +4367,45 @@ const ADMIN_KEY = "Yota2025$";
 const MAX_UPLOAD_BYTES = 4 * 1024 * 1024;
 const UPLOAD_COMPRESS_THRESHOLD = 1.5 * 1024 * 1024;
 
+function stripLeadingLetters(sku: string) {
+  return sku.replace(/^[A-Z]+/, "");
+}
+
+function isTvhInvoice(extraction: InvoiceExtraction) {
+  return (extraction.supplier || "").toUpperCase().includes("TVH");
+}
+
+// En facturas TVH el codigo viene con letras delante del serial: se dejan solo serial/numero
+function prepareInvoiceDraft(extraction: InvoiceExtraction): InvoiceExtraction {
+  if (!isTvhInvoice(extraction)) return extraction;
+  return {
+    ...extraction,
+    items: extraction.items.map((item) => {
+      const sku = normalizeSku(item.sku);
+      const stripped = stripLeadingLetters(sku);
+      return stripped && /\d/.test(stripped) && stripped !== sku ? { ...item, sku: stripped } : item;
+    })
+  };
+}
+
+type DraftItemMatch = { kind: "exacto" | "relacionado" | "nuevo"; product?: Product };
+
+function findInvoiceItemMatch(products: Product[], skuRaw: string | null): DraftItemMatch {
+  const sku = normalizeSku(skuRaw);
+  if (!sku) return { kind: "nuevo" };
+  const exact = products.find((product) => normalizeSku(product.sku) === sku);
+  if (exact) return { kind: "exacto", product: exact };
+  const core = stripLeadingLetters(sku);
+  if (core && /\d/.test(core)) {
+    const related = products.find((product) => {
+      const productSku = normalizeSku(product.sku);
+      return productSku === core || stripLeadingLetters(productSku) === core;
+    });
+    if (related) return { kind: "relacionado", product: related };
+  }
+  return { kind: "nuevo" };
+}
+
 async function compressImageFile(file: File): Promise<File> {
   const dataUrl = await new Promise<string>((resolve, reject) => {
     const reader = new FileReader();
@@ -4789,7 +4875,7 @@ function applyItemsToInventory(products: Product[], invoice: InvoiceExtraction, 
         motor: "",
         crossRef: "",
         customerRef: "",
-        location: "",
+        location: (item.location || "").trim().toUpperCase(),
         initialStock: 0,
         entries: item.quantity,
         exits: 0,

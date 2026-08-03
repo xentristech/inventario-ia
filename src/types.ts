@@ -30,6 +30,7 @@ export type InvoiceItem = {
   unitCost: number | null;
   lineTotal: number | null;
   confidence: number;
+  location?: string | null;
 };
 
 export type InvoiceExtraction = {
