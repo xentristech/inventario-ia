@@ -251,6 +251,9 @@ function App() {
   const [movementEditForm, setMovementEditForm] = useState({ date: "", party: "", reference: "", quantity: "1" });
   const [movementDeleteArmed, setMovementDeleteArmed] = useState(false);
   const [rowDeleteArmed, setRowDeleteArmed] = useState<string | null>(null);
+  const [batchEdit, setBatchEdit] = useState<{ kind: "entry" | "exit"; ids: string[] } | null>(null);
+  const [batchEditForm, setBatchEditForm] = useState({ date: "", party: "", reference: "" });
+  const [batchDeleteArmed, setBatchDeleteArmed] = useState(false);
   const [returnForm, setReturnForm] = useState<ReturnForm>(() => emptyReturnForm());
   const [returnStatus, setReturnStatus] = useState("");
   const [printableReturn, setPrintableReturn] = useState<ProductReturn | null>(null);
@@ -891,6 +894,67 @@ function App() {
     setRowDeleteArmed(null);
     performMovementDelete(kind, id);
     if (movementEdit?.id === id) cancelMovementEdit();
+  }
+
+  function startBatchEdit(kind: "entry" | "exit", group: { date: string; party: string; reference: string; items: { id: string }[] }) {
+    setBatchEdit({ kind, ids: group.items.map((item) => item.id) });
+    setBatchEditForm({ date: group.date, party: group.party, reference: group.reference });
+    setBatchDeleteArmed(false);
+    cancelMovementEdit();
+  }
+
+  function cancelBatchEdit() {
+    setBatchEdit(null);
+    setBatchDeleteArmed(false);
+  }
+
+  function saveBatchEdit(event: FormEvent) {
+    event.preventDefault();
+    if (!batchEdit) return;
+    const ids = new Set(batchEdit.ids);
+    const date = batchEditForm.date || new Date().toISOString().slice(0, 10);
+    const party = batchEditForm.party.trim();
+    const reference = batchEditForm.reference.trim();
+
+    if (batchEdit.kind === "entry") {
+      setEntries((current) =>
+        current.map((item) =>
+          ids.has(item.id)
+            ? { ...item, date, supplier: party || item.supplier, reference: reference || item.reference }
+            : item
+        )
+      );
+    } else {
+      setExits((current) =>
+        current.map((item) =>
+          ids.has(item.id)
+            ? { ...item, date, client: party || item.client, reference: reference || item.reference }
+            : item
+        )
+      );
+    }
+    cancelBatchEdit();
+  }
+
+  function deleteBatch() {
+    if (!batchEdit) return;
+    if (!batchDeleteArmed) {
+      setBatchDeleteArmed(true);
+      return;
+    }
+    const ids = new Set(batchEdit.ids);
+    if (batchEdit.kind === "entry") {
+      for (const record of entries.filter((item) => ids.has(item.id))) {
+        applyProductDelta(record.sku, record.productId, -record.quantity, -record.quantity, 0);
+      }
+      setEntries((current) => current.filter((item) => !ids.has(item.id)));
+    } else {
+      for (const record of exits.filter((item) => ids.has(item.id))) {
+        applyProductDelta(record.sku, record.productId, record.quantity, 0, -record.quantity);
+      }
+      setExits((current) => current.filter((item) => !ids.has(item.id)));
+    }
+    cancelBatchEdit();
   }
 
   function clearHistoryFilters(kind: "entries" | "exits") {
@@ -1743,6 +1807,56 @@ function App() {
     </div>
   );
 
+  const batchEditor = batchEdit && (
+    <div className="movement-editor">
+      <form onSubmit={saveBatchEdit}>
+        <div className="panel-title">
+          <Pencil size={16} />
+          <h2>
+            Editar {batchEdit.kind === "entry" ? "entrada" : "salida"} completa ({batchEdit.ids.length} item
+            {batchEdit.ids.length === 1 ? "" : "s"})
+          </h2>
+        </div>
+        <div className="form-row">
+          <label>
+            Fecha
+            <input
+              onChange={(event) => setBatchEditForm({ ...batchEditForm, date: event.target.value })}
+              type="date"
+              value={batchEditForm.date}
+            />
+          </label>
+          <label>
+            {batchEdit.kind === "entry" ? "Proveedor" : "Cliente"}
+            <input
+              onChange={(event) => setBatchEditForm({ ...batchEditForm, party: event.target.value })}
+              value={batchEditForm.party}
+            />
+          </label>
+        </div>
+        <label>
+          Referencia
+          <input
+            onChange={(event) => setBatchEditForm({ ...batchEditForm, reference: event.target.value })}
+            value={batchEditForm.reference}
+          />
+        </label>
+        <div className="button-row">
+          <button className="primary-button" type="submit">
+            Guardar cambios
+          </button>
+          <button className="secondary-button danger" onClick={deleteBatch} type="button">
+            <Trash2 size={15} />
+            {batchDeleteArmed ? "Confirmar eliminacion" : "Eliminar todo"}
+          </button>
+          <button className="secondary-button" onClick={cancelBatchEdit} type="button">
+            Cancelar
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+
   return (
     <>
     <div className="app-shell">
@@ -2303,6 +2417,7 @@ function App() {
                 </button>
               </div>
               {movementEdit?.kind === "entry" && movementEditor}
+              {batchEdit?.kind === "entry" && batchEditor}
 
               {entries.length ? (
                 entryGrouped ? (
@@ -2322,6 +2437,20 @@ function App() {
                                 {group.items.length} item{group.items.length === 1 ? "" : "s"}
                               </span>
                               <strong>{group.units} und</strong>
+                              {adminUnlocked && (
+                                <button
+                                  className="icon-button"
+                                  onClick={(event) => {
+                                    event.preventDefault();
+                                    event.stopPropagation();
+                                    startBatchEdit("entry", group);
+                                  }}
+                                  title="Editar o eliminar la entrada completa"
+                                  type="button"
+                                >
+                                  <Pencil size={14} />
+                                </button>
+                              )}
                             </div>
                           </summary>
                           <div className="table-wrap">
@@ -2710,6 +2839,7 @@ function App() {
                 </button>
               </div>
               {movementEdit?.kind === "exit" && movementEditor}
+              {batchEdit?.kind === "exit" && batchEditor}
 
               {historyQuery.trim() && (
                 <div className="client-history">
@@ -2778,6 +2908,20 @@ function App() {
                                 {group.items.length} item{group.items.length === 1 ? "" : "s"}
                               </span>
                               <strong>{group.units} und</strong>
+                              {adminUnlocked && (
+                                <button
+                                  className="icon-button"
+                                  onClick={(event) => {
+                                    event.preventDefault();
+                                    event.stopPropagation();
+                                    startBatchEdit("exit", group);
+                                  }}
+                                  title="Editar o eliminar la salida completa"
+                                  type="button"
+                                >
+                                  <Pencil size={14} />
+                                </button>
+                              )}
                             </div>
                           </summary>
                           <div className="table-wrap">
