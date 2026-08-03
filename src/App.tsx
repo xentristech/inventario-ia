@@ -22,7 +22,7 @@ import {
   X
 } from "lucide-react";
 import Papa from "papaparse";
-import { ChangeEvent, FormEvent, KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
+import { ChangeEvent, FormEvent, KeyboardEvent, useEffect, useMemo, useState } from "react";
 import { sampleProducts } from "./sampleData";
 import {
   clearLocalInventoryData,
@@ -252,11 +252,6 @@ function App() {
   const [cloudReady, setCloudReady] = useState(false);
   const [cloudStatus, setCloudStatus] = useState("Sincronizando nube...");
   const localInventoryAvailable = isLocalRuntime();
-  const initialSnapshotRef = useRef<InventorySnapshot | null>(null);
-
-  if (!initialSnapshotRef.current) {
-    initialSnapshotRef.current = createSnapshot(products, invoices, entries, exits, productReturns);
-  }
 
   useEffect(() => saveProducts(products), [products]);
   useEffect(() => saveInvoices(invoices), [invoices]);
@@ -276,9 +271,7 @@ function App() {
         }
 
         if (hasSnapshotData(snapshot)) {
-          const localSnapshot = initialSnapshotRef.current || createSnapshot(products, invoices, entries, exits, productReturns);
-          const mergedSnapshot = mergeStartupSnapshot(snapshot, localSnapshot);
-          applySnapshot(mergedSnapshot);
+          applySnapshot(snapshot);
           setImportStatus(`Inventario sincronizado en nube${formatCloudDate(snapshot.updatedAt)}.`);
           setCloudStatus(`Sincronizado en nube${formatCloudDate(snapshot.updatedAt)}.`);
         } else {
@@ -3056,61 +3049,6 @@ function hasSnapshotData(snapshot: InventorySnapshot | null | undefined) {
         snapshot.exits.length ||
         snapshot.productReturns.length)
   );
-}
-
-function mergeStartupSnapshot(cloud: InventorySnapshot, local: InventorySnapshot): InventorySnapshot {
-  const preferLocalProducts = hasSnapshotMovements(local) && local.products.length > 0;
-  return {
-    products: preferLocalProducts
-      ? mergeSnapshotProducts(cloud.products, local.products)
-      : mergeSnapshotProducts(local.products, cloud.products),
-    invoices: mergeById(cloud.invoices, local.invoices),
-    entries: mergeById(cloud.entries, local.entries),
-    exits: mergeById(cloud.exits, local.exits),
-    productReturns: mergeById(cloud.productReturns, local.productReturns),
-    updatedAt: cloud.updatedAt || local.updatedAt || null
-  };
-}
-
-function hasSnapshotMovements(snapshot: InventorySnapshot) {
-  return Boolean(
-    snapshot.invoices.length ||
-      snapshot.entries.length ||
-      snapshot.exits.length ||
-      snapshot.productReturns.length
-  );
-}
-
-function mergeSnapshotProducts(primary: Product[], secondary: Product[]) {
-  const next = [...primary];
-  for (const product of secondary) {
-    const sku = normalizeSku(product.sku);
-    const index = next.findIndex(
-      (item) => item.id === product.id || (sku && normalizeSku(item.sku) === sku)
-    );
-    if (index >= 0) {
-      next[index] = {
-        ...next[index],
-        ...product,
-        id: next[index].id || product.id,
-        sku: normalizeSku(product.sku) || next[index].sku
-      };
-    } else {
-      next.push(product);
-    }
-  }
-  return next;
-}
-
-function mergeById<T extends { id: string }>(primary: T[], secondary: T[]) {
-  const next = [...primary];
-  const seen = new Set(primary.map((item) => item.id));
-  for (const item of secondary) {
-    if (seen.has(item.id)) continue;
-    seen.add(item.id);
-    next.push(item);
-  }
-  return next;
 }
 
 function formatCloudDate(value?: string | null) {
