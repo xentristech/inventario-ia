@@ -236,6 +236,9 @@ function App() {
   const [entryStatus, setEntryStatus] = useState("");
   const [printableEntry, setPrintableEntry] = useState<ProductEntry[]>([]);
   const [entryHistoryQuery, setEntryHistoryQuery] = useState("");
+  const [entryFilters, setEntryFilters] = useState<HistoryFilters>(emptyHistoryFilters());
+  const [entrySmartQuery, setEntrySmartQuery] = useState("");
+  const [entrySmartStatus, setEntrySmartStatus] = useState("");
   const [returnForm, setReturnForm] = useState<ReturnForm>(() => emptyReturnForm());
   const [returnStatus, setReturnStatus] = useState("");
   const [printableReturn, setPrintableReturn] = useState<ProductReturn | null>(null);
@@ -250,6 +253,10 @@ function App() {
   const [importRows, setImportRows] = useState<ImportRow[]>([]);
   const [importStatus, setImportStatus] = useState("");
   const [historyQuery, setHistoryQuery] = useState("");
+  const [exitFilters, setExitFilters] = useState<HistoryFilters>(emptyHistoryFilters());
+  const [exitSmartQuery, setExitSmartQuery] = useState("");
+  const [exitSmartStatus, setExitSmartStatus] = useState("");
+  const [smartSearching, setSmartSearching] = useState(false);
   const [cloudReady, setCloudReady] = useState(false);
   const [cloudStatus, setCloudStatus] = useState("Sincronizando nube...");
   const localInventoryAvailable = isLocalRuntime();
@@ -387,13 +394,23 @@ function App() {
   );
   const stagedEntryQuantity = resolvedEntryLines.reduce((sum, line) => sum + line.quantity, 0);
   const knownSuppliers = useMemo(() => buildSupplierOptions(entries), [entries]);
-  const filteredHistoryEntries = useMemo(
-    () => filterEntryHistory(entries, entryHistoryQuery).slice(0, 80),
-    [entries, entryHistoryQuery]
+  const filteredEntriesAll = useMemo(
+    () => filterEntryHistory(entries, entryHistoryQuery, entryFilters),
+    [entries, entryHistoryQuery, entryFilters]
   );
-  const filteredHistoryExits = useMemo(
-    () => filterExitHistory(exits, historyQuery).slice(0, 80),
-    [exits, historyQuery]
+  const filteredHistoryEntries = useMemo(() => filteredEntriesAll.slice(0, 80), [filteredEntriesAll]);
+  const entryHistoryUnits = useMemo(
+    () => filteredEntriesAll.reduce((sum, entry) => sum + entry.quantity, 0),
+    [filteredEntriesAll]
+  );
+  const filteredExitsAll = useMemo(
+    () => filterExitHistory(exits, historyQuery, exitFilters),
+    [exits, historyQuery, exitFilters]
+  );
+  const filteredHistoryExits = useMemo(() => filteredExitsAll.slice(0, 80), [filteredExitsAll]);
+  const exitHistoryUnits = useMemo(
+    () => filteredExitsAll.reduce((sum, exit) => sum + exit.quantity, 0),
+    [filteredExitsAll]
   );
   const clientProductHistory = useMemo(
     () => buildClientProductHistory(exits, products, historyQuery),
@@ -620,6 +637,74 @@ function App() {
       { sheet: "Entradas", data: entriesSheet },
       { sheet: "Salidas", data: exitsSheet }
     ]).toFile(`Inventario_YOTA_${new Date().toISOString().slice(0, 10)}.xlsx`);
+  }
+
+  async function runSmartHistorySearch(kind: "entries" | "exits") {
+    const query = (kind === "entries" ? entrySmartQuery : exitSmartQuery).trim();
+    const setStatus = kind === "entries" ? setEntrySmartStatus : setExitSmartStatus;
+    if (!query) {
+      setStatus("Escribe que quieres buscar, por ejemplo: salidas a Sertemap en julio.");
+      return;
+    }
+
+    setSmartSearching(true);
+    setStatus("Analizando con IA...");
+    try {
+      const response = await fetch("/api/history/parse-query", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          query,
+          kind,
+          parties: kind === "entries" ? knownSuppliers : knownClients
+        })
+      });
+      if (response.status === 501) {
+        setStatus("La IA no esta configurada en el servidor.");
+        return;
+      }
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+      const result = (await response.json()) as {
+        from: string | null;
+        to: string | null;
+        party: string | null;
+        text: string | null;
+        summary: string;
+      };
+      const filters: HistoryFilters = {
+        from: result.from || "",
+        to: result.to || "",
+        party: result.party || ""
+      };
+      if (kind === "entries") {
+        setEntryFilters(filters);
+        setEntryHistoryQuery(result.text || "");
+      } else {
+        setExitFilters(filters);
+        setHistoryQuery(result.text || "");
+      }
+      setStatus(result.summary || "Filtros aplicados.");
+    } catch {
+      setStatus("No pude interpretar la busqueda. Intenta de nuevo o usa los filtros manuales.");
+    } finally {
+      setSmartSearching(false);
+    }
+  }
+
+  function clearHistoryFilters(kind: "entries" | "exits") {
+    if (kind === "entries") {
+      setEntryFilters(emptyHistoryFilters());
+      setEntryHistoryQuery("");
+      setEntrySmartQuery("");
+      setEntrySmartStatus("");
+    } else {
+      setExitFilters(emptyHistoryFilters());
+      setHistoryQuery("");
+      setExitSmartQuery("");
+      setExitSmartStatus("");
+    }
   }
 
   function editProduct(product: Product) {
@@ -1799,6 +1884,74 @@ function App() {
                   placeholder="Buscar proveedor, producto, ref o entrada"
                 />
               </div>
+              <div className="form-row three">
+                <label>
+                  Desde
+                  <input
+                    type="date"
+                    value={entryFilters.from}
+                    onChange={(event) => setEntryFilters({ ...entryFilters, from: event.target.value })}
+                  />
+                </label>
+                <label>
+                  Hasta
+                  <input
+                    type="date"
+                    value={entryFilters.to}
+                    onChange={(event) => setEntryFilters({ ...entryFilters, to: event.target.value })}
+                  />
+                </label>
+                <label>
+                  Proveedor
+                  <select
+                    value={entryFilters.party}
+                    onChange={(event) => setEntryFilters({ ...entryFilters, party: event.target.value })}
+                  >
+                    <option value="">Todos</option>
+                    {knownSuppliers.map((supplier) => (
+                      <option key={supplier} value={supplier}>
+                        {supplier}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+              <div className="searchbar">
+                <Sparkles size={18} />
+                <input
+                  value={entrySmartQuery}
+                  onChange={(event) => setEntrySmartQuery(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      runSmartHistorySearch("entries");
+                    }
+                  }}
+                  placeholder='Buscar con IA: "entradas de MAGGIE en julio"'
+                />
+                <button
+                  className="secondary-button tiny"
+                  disabled={smartSearching}
+                  onClick={() => runSmartHistorySearch("entries")}
+                  type="button"
+                >
+                  {smartSearching ? "..." : "IA"}
+                </button>
+              </div>
+              {entrySmartStatus && <p className="status-line">{entrySmartStatus}</p>}
+              <div className="exit-lines-header">
+                <span>
+                  {filteredEntriesAll.length} movimiento{filteredEntriesAll.length === 1 ? "" : "s"}
+                  {hasActiveHistoryFilters(entryFilters) || entryHistoryQuery.trim() ? " (filtrado)" : ""}
+                </span>
+                <strong>{entryHistoryUnits} unidades</strong>
+              </div>
+              {(hasActiveHistoryFilters(entryFilters) || entryHistoryQuery.trim() || entrySmartQuery.trim()) && (
+                <button className="ghost-button" onClick={() => clearHistoryFilters("entries")} type="button">
+                  <X size={15} />
+                  Limpiar filtros
+                </button>
+              )}
 
               {entries.length ? (
                 filteredHistoryEntries.length ? (
@@ -2018,6 +2171,74 @@ function App() {
                   placeholder="Buscar cliente, producto, ref o salida"
                 />
               </div>
+              <div className="form-row three">
+                <label>
+                  Desde
+                  <input
+                    type="date"
+                    value={exitFilters.from}
+                    onChange={(event) => setExitFilters({ ...exitFilters, from: event.target.value })}
+                  />
+                </label>
+                <label>
+                  Hasta
+                  <input
+                    type="date"
+                    value={exitFilters.to}
+                    onChange={(event) => setExitFilters({ ...exitFilters, to: event.target.value })}
+                  />
+                </label>
+                <label>
+                  Cliente
+                  <select
+                    value={exitFilters.party}
+                    onChange={(event) => setExitFilters({ ...exitFilters, party: event.target.value })}
+                  >
+                    <option value="">Todos</option>
+                    {knownClients.map((client) => (
+                      <option key={client} value={client}>
+                        {client}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+              <div className="searchbar">
+                <Sparkles size={18} />
+                <input
+                  value={exitSmartQuery}
+                  onChange={(event) => setExitSmartQuery(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      runSmartHistorySearch("exits");
+                    }
+                  }}
+                  placeholder='Buscar con IA: "salidas a Sertemap en julio"'
+                />
+                <button
+                  className="secondary-button tiny"
+                  disabled={smartSearching}
+                  onClick={() => runSmartHistorySearch("exits")}
+                  type="button"
+                >
+                  {smartSearching ? "..." : "IA"}
+                </button>
+              </div>
+              {exitSmartStatus && <p className="status-line">{exitSmartStatus}</p>}
+              <div className="exit-lines-header">
+                <span>
+                  {filteredExitsAll.length} movimiento{filteredExitsAll.length === 1 ? "" : "s"}
+                  {hasActiveHistoryFilters(exitFilters) || historyQuery.trim() ? " (filtrado)" : ""}
+                </span>
+                <strong>{exitHistoryUnits} unidades</strong>
+              </div>
+              {(hasActiveHistoryFilters(exitFilters) || historyQuery.trim() || exitSmartQuery.trim()) && (
+                <button className="ghost-button" onClick={() => clearHistoryFilters("exits")} type="button">
+                  <X size={15} />
+                  Limpiar filtros
+                </button>
+              )}
 
               {historyQuery.trim() && (
                 <div className="client-history">
@@ -3193,11 +3414,35 @@ function buildClientOptions(exits: ProductExit[]) {
   return Array.from(clients.values()).sort((a, b) => a.localeCompare(b, "es"));
 }
 
-function filterExitHistory(exits: ProductExit[], query: string) {
+type HistoryFilters = {
+  from: string;
+  to: string;
+  party: string;
+};
+
+function emptyHistoryFilters(): HistoryFilters {
+  return { from: "", to: "", party: "" };
+}
+
+function hasActiveHistoryFilters(filters: HistoryFilters) {
+  return Boolean(filters.from || filters.to || filters.party);
+}
+
+function matchesHistoryFilters(date: string, party: string, filters: HistoryFilters) {
+  if (filters.from && date < filters.from) return false;
+  if (filters.to && date > filters.to) return false;
+  if (filters.party && !normalizeHeader(party).includes(normalizeHeader(filters.party))) return false;
+  return true;
+}
+
+function filterExitHistory(exits: ProductExit[], query: string, filters: HistoryFilters) {
   const cleanQuery = normalizeHeader(query);
   const sortedExits = [...exits].sort((a, b) => exitTimestamp(b) - exitTimestamp(a));
-  if (!cleanQuery) return sortedExits;
-  return sortedExits.filter((exit) => normalizeHeader(historySearchText(exit)).includes(cleanQuery));
+  return sortedExits.filter(
+    (exit) =>
+      matchesHistoryFilters(exit.date, exit.client, filters) &&
+      (!cleanQuery || normalizeHeader(historySearchText(exit)).includes(cleanQuery))
+  );
 }
 
 function buildSupplierOptions(entries: ProductEntry[]) {
@@ -3211,11 +3456,14 @@ function buildSupplierOptions(entries: ProductEntry[]) {
   return Array.from(suppliers.values()).sort((a, b) => a.localeCompare(b, "es"));
 }
 
-function filterEntryHistory(entries: ProductEntry[], query: string) {
+function filterEntryHistory(entries: ProductEntry[], query: string, filters: HistoryFilters) {
   const cleanQuery = normalizeHeader(query);
   const sortedEntries = [...entries].sort((a, b) => entryTimestamp(b) - entryTimestamp(a));
-  if (!cleanQuery) return sortedEntries;
-  return sortedEntries.filter((entry) => normalizeHeader(entryHistorySearchText(entry)).includes(cleanQuery));
+  return sortedEntries.filter(
+    (entry) =>
+      matchesHistoryFilters(entry.date, entry.supplier, filters) &&
+      (!cleanQuery || normalizeHeader(entryHistorySearchText(entry)).includes(cleanQuery))
+  );
 }
 
 function entryHistorySearchText(entry: ProductEntry) {
@@ -3244,7 +3492,9 @@ function buildClientProductHistory(
   if (!cleanQuery) return [];
 
   const directClientMatches = exits.filter((exit) => normalizeHeader(exit.client).includes(cleanQuery));
-  const sourceExits = directClientMatches.length ? directClientMatches : filterExitHistory(exits, query);
+  const sourceExits = directClientMatches.length
+    ? directClientMatches
+    : filterExitHistory(exits, query, emptyHistoryFilters());
   const history = new Map<string, ClientProductHistory>();
 
   for (const exit of sourceExits) {

@@ -3,6 +3,7 @@ import express from "express";
 import fs from "node:fs/promises";
 import multer from "multer";
 import readXlsxFile from "read-excel-file/node";
+import { parseHistoryQuery } from "./aiHistory.js";
 import { extractInvoiceFromFile } from "./aiInvoice.js";
 import { readCloudState, writeCloudState } from "./cloudState.js";
 
@@ -39,6 +40,28 @@ app.put("/api/state", async (req, res) => {
     res.json(await writeCloudState(req.body));
   } catch (error) {
     res.status(503).json({ error: "CLOUD_STATE_SAVE_FAILED", detail: errorMessage(error) });
+  }
+});
+
+app.post("/api/history/parse-query", async (req, res) => {
+  const query = String(req.body?.query || "").trim();
+  const kind = req.body?.kind === "entries" ? ("entries" as const) : ("exits" as const);
+  const parties = Array.isArray(req.body?.parties) ? req.body.parties.map(String) : [];
+
+  if (!query) {
+    res.status(400).json({ error: "QUERY_REQUIRED" });
+    return;
+  }
+
+  try {
+    res.json(await parseHistoryQuery(query, kind, parties));
+  } catch (error) {
+    const message = errorMessage(error);
+    if (message === "OPENAI_API_KEY_MISSING") {
+      res.status(501).json({ error: "AI_NOT_CONFIGURED" });
+      return;
+    }
+    res.status(500).json({ error: "HISTORY_QUERY_FAILED", detail: message });
   }
 });
 
