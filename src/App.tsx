@@ -237,6 +237,7 @@ function App() {
   const [printableEntry, setPrintableEntry] = useState<ProductEntry[]>([]);
   const [entryHistoryQuery, setEntryHistoryQuery] = useState("");
   const [entryPage, setEntryPage] = useState(0);
+  const [entryGrouped, setEntryGrouped] = useState(true);
   const [entryFilters, setEntryFilters] = useState<HistoryFilters>(emptyHistoryFilters());
   const [entrySmartQuery, setEntrySmartQuery] = useState("");
   const [entrySmartStatus, setEntrySmartStatus] = useState("");
@@ -255,6 +256,7 @@ function App() {
   const [importStatus, setImportStatus] = useState("");
   const [historyQuery, setHistoryQuery] = useState("");
   const [exitPage, setExitPage] = useState(0);
+  const [exitGrouped, setExitGrouped] = useState(true);
   const [productPage, setProductPage] = useState(0);
   const [returnPage, setReturnPage] = useState(0);
   const [exitFilters, setExitFilters] = useState<HistoryFilters>(emptyHistoryFilters());
@@ -376,8 +378,8 @@ function App() {
   );
 
   useEffect(() => setProductPage(0), [query]);
-  useEffect(() => setEntryPage(0), [entryHistoryQuery, entryFilters]);
-  useEffect(() => setExitPage(0), [historyQuery, exitFilters]);
+  useEffect(() => setEntryPage(0), [entryHistoryQuery, entryFilters, entryGrouped]);
+  useEffect(() => setExitPage(0), [historyQuery, exitFilters, exitGrouped]);
 
   const selectedExitProduct = useMemo(
     () => matchProductForExit(products, exitForm.sku).product,
@@ -415,6 +417,14 @@ function App() {
     () => pageSlice(filteredEntriesAll, entryPage, HISTORY_PAGE_SIZE),
     [filteredEntriesAll, entryPage]
   );
+  const entryGroups = useMemo(
+    () => groupMovements(filteredEntriesAll, (entry) => entry.supplier),
+    [filteredEntriesAll]
+  );
+  const pagedEntryGroups = useMemo(
+    () => pageSlice(entryGroups, entryPage, GROUP_PAGE_SIZE),
+    [entryGroups, entryPage]
+  );
   const entryHistoryUnits = useMemo(
     () => filteredEntriesAll.reduce((sum, entry) => sum + entry.quantity, 0),
     [filteredEntriesAll]
@@ -426,6 +436,14 @@ function App() {
   const filteredHistoryExits = useMemo(
     () => pageSlice(filteredExitsAll, exitPage, HISTORY_PAGE_SIZE),
     [filteredExitsAll, exitPage]
+  );
+  const exitGroups = useMemo(
+    () => groupMovements(filteredExitsAll, (exit) => exit.client),
+    [filteredExitsAll]
+  );
+  const pagedExitGroups = useMemo(
+    () => pageSlice(exitGroups, exitPage, GROUP_PAGE_SIZE),
+    [exitGroups, exitPage]
   );
   const exitHistoryUnits = useMemo(
     () => filteredExitsAll.reduce((sum, exit) => sum + exit.quantity, 0),
@@ -1977,9 +1995,76 @@ function App() {
                   Limpiar filtros
                 </button>
               )}
+              <div className="button-row">
+                <button
+                  className={entryGrouped ? "secondary-button tiny active-toggle" : "secondary-button tiny"}
+                  onClick={() => setEntryGrouped(true)}
+                  type="button"
+                >
+                  Por proveedor
+                </button>
+                <button
+                  className={entryGrouped ? "secondary-button tiny" : "secondary-button tiny active-toggle"}
+                  onClick={() => setEntryGrouped(false)}
+                  type="button"
+                >
+                  Detallado
+                </button>
+              </div>
 
               {entries.length ? (
-                filteredHistoryEntries.length ? (
+                entryGrouped ? (
+                  entryGroups.length ? (
+                    <div className="movement-groups">
+                      {pagedEntryGroups.map((group) => (
+                        <details className="movement-group" key={group.key}>
+                          <summary>
+                            <div className="movement-group-main">
+                              <strong>{group.party || "Sin proveedor"}</strong>
+                              <span>
+                                {group.date} · {group.reference}
+                              </span>
+                            </div>
+                            <div className="movement-group-numbers">
+                              <span>
+                                {group.items.length} item{group.items.length === 1 ? "" : "s"}
+                              </span>
+                              <strong>{group.units} und</strong>
+                            </div>
+                          </summary>
+                          <div className="table-wrap">
+                            <table>
+                              <thead>
+                                <tr>
+                                  <th>Ref</th>
+                                  <th>Producto</th>
+                                  <th>Cant.</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {group.items.map((entry) => (
+                                  <tr key={entry.id}>
+                                    <td>{entry.sku}</td>
+                                    <td>{entry.productName}</td>
+                                    <td>{entry.quantity}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        </details>
+                      ))}
+                      <Paginator
+                        page={entryPage}
+                        total={entryGroups.length}
+                        pageSize={GROUP_PAGE_SIZE}
+                        onPage={setEntryPage}
+                      />
+                    </div>
+                  ) : (
+                    <EmptyState label="No hay entradas que coincidan con esa busqueda." />
+                  )
+                ) : filteredHistoryEntries.length ? (
                   <div className="table-wrap">
                     <table>
                       <thead>
@@ -2270,6 +2355,22 @@ function App() {
                   Limpiar filtros
                 </button>
               )}
+              <div className="button-row">
+                <button
+                  className={exitGrouped ? "secondary-button tiny active-toggle" : "secondary-button tiny"}
+                  onClick={() => setExitGrouped(true)}
+                  type="button"
+                >
+                  Por cliente
+                </button>
+                <button
+                  className={exitGrouped ? "secondary-button tiny" : "secondary-button tiny active-toggle"}
+                  onClick={() => setExitGrouped(false)}
+                  type="button"
+                >
+                  Detallado
+                </button>
+              </div>
 
               {historyQuery.trim() && (
                 <div className="client-history">
@@ -2321,7 +2422,58 @@ function App() {
               )}
 
               {exits.length ? (
-                filteredHistoryExits.length ? (
+                exitGrouped ? (
+                  exitGroups.length ? (
+                    <div className="movement-groups">
+                      {pagedExitGroups.map((group) => (
+                        <details className="movement-group" key={group.key}>
+                          <summary>
+                            <div className="movement-group-main">
+                              <strong>{group.party || "Sin cliente"}</strong>
+                              <span>
+                                {group.date} · {group.reference}
+                              </span>
+                            </div>
+                            <div className="movement-group-numbers">
+                              <span>
+                                {group.items.length} item{group.items.length === 1 ? "" : "s"}
+                              </span>
+                              <strong>{group.units} und</strong>
+                            </div>
+                          </summary>
+                          <div className="table-wrap">
+                            <table>
+                              <thead>
+                                <tr>
+                                  <th>Ref</th>
+                                  <th>Producto</th>
+                                  <th>Cant.</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {group.items.map((exit) => (
+                                  <tr key={exit.id}>
+                                    <td>{exit.sku}</td>
+                                    <td>{exit.productName}</td>
+                                    <td>{exit.quantity}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        </details>
+                      ))}
+                      <Paginator
+                        page={exitPage}
+                        total={exitGroups.length}
+                        pageSize={GROUP_PAGE_SIZE}
+                        onPage={setExitPage}
+                      />
+                    </div>
+                  ) : (
+                    <EmptyState label="No hay salidas que coincidan con esa busqueda." />
+                  )
+                ) : filteredHistoryExits.length ? (
                   <div className="table-wrap">
                     <table>
                       <thead>
@@ -3459,6 +3611,42 @@ function buildClientOptions(exits: ProductExit[]) {
 
 const HISTORY_PAGE_SIZE = 50;
 const PRODUCT_PAGE_SIZE = 24;
+const GROUP_PAGE_SIZE = 20;
+
+type MovementGroup<T> = {
+  key: string;
+  date: string;
+  party: string;
+  reference: string;
+  items: T[];
+  units: number;
+};
+
+function groupMovements<T extends { id: string; batchId?: string; date: string; reference: string; quantity: number }>(
+  items: T[],
+  getParty: (item: T) => string
+): MovementGroup<T>[] {
+  const groups = new Map<string, MovementGroup<T>>();
+  for (const item of items) {
+    const party = getParty(item);
+    const key = item.batchId || `${item.date}|${normalizeHeader(party)}|${normalizeHeader(item.reference)}`;
+    const group = groups.get(key);
+    if (group) {
+      group.items.push(item);
+      group.units += item.quantity;
+    } else {
+      groups.set(key, {
+        key,
+        date: item.date,
+        party,
+        reference: item.reference,
+        items: [item],
+        units: item.quantity
+      });
+    }
+  }
+  return Array.from(groups.values());
+}
 
 function pageSlice<T>(items: T[], page: number, pageSize: number) {
   const pages = Math.max(1, Math.ceil(items.length / pageSize));

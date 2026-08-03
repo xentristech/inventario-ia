@@ -1355,3 +1355,80 @@ tr:last-child td {
 .paginator span {
   white-space: nowrap;
 }
+
+.movement-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.movement-group {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+  overflow: hidden;
+}
+
+.movement-group summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.movement-group summary::-webkit-details-marker {
+  display: none;
+}
+
+.movement-group[open] summary {
+  border-bottom: 1px solid var(--line);
+  background: #fafafa;
+}
+
+.movement-group-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.movement-group-main strong {
+  color: var(--ink);
+  font-size: 0.9rem;
+}
+
+.movement-group-main span {
+  color: var(--steel);
+  font-size: 0.8rem;
+}
+
+.movement-group-numbers {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  white-space: nowrap;
+  color: var(--steel);
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.movement-group-numbers strong {
+  color: var(--ink);
+}
+
+.movement-group .table-wrap {
+  border: 0;
+  border-radius: 0;
+}
+
+.movement-group table {
+  min-width: 0;
+}
+
+.secondary-button.active-toggle {
+  border-color: var(--coral, #e23b2e);
+  color: var(--coral, #e23b2e);
+}
