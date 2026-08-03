@@ -158,7 +158,7 @@ type ClientProductHistory = {
   product?: Product;
 };
 
-type PrintView = "exit" | "entry" | "no-stock" | "return" | null;
+type PrintView = "exit" | "entry" | "no-stock" | "return" | "entry-history" | "exit-history" | null;
 
 const emptyForm: ProductForm = {
   id: null,
@@ -738,6 +738,11 @@ function App() {
     } finally {
       setSmartSearching(false);
     }
+  }
+
+  function printHistoryReport(kind: "entries" | "exits") {
+    setPrintView(kind === "entries" ? "entry-history" : "exit-history");
+    window.setTimeout(() => window.print(), 80);
   }
 
   function startMovementEdit(
@@ -2292,6 +2297,10 @@ function App() {
                 >
                   Detallado
                 </button>
+                <button className="secondary-button tiny" onClick={() => printHistoryReport("entries")} type="button">
+                  <Printer size={15} />
+                  Imprimir PDF
+                </button>
               </div>
               {movementEdit?.kind === "entry" && movementEditor}
 
@@ -2694,6 +2703,10 @@ function App() {
                   type="button"
                 >
                   Detallado
+                </button>
+                <button className="secondary-button tiny" onClick={() => printHistoryReport("exits")} type="button">
+                  <Printer size={15} />
+                  Imprimir PDF
                 </button>
               </div>
               {movementEdit?.kind === "exit" && movementEditor}
@@ -3330,6 +3343,38 @@ function App() {
     <PrintEntryReceipt active={printView === "entry"} records={printableEntry} />
     <PrintNoStockReport active={printView === "no-stock"} products={stats.lowStock} />
     <PrintReturnAct active={printView === "return"} record={printableReturn} />
+    <PrintHistoryReport
+      active={printView === "entry-history"}
+      filtersLabel={describeHistoryFilters(entryFilters, entryHistoryQuery, "Proveedor")}
+      partyLabel="Proveedor"
+      rows={filteredEntriesAll.map((entry) => ({
+        id: entry.id,
+        date: entry.date,
+        reference: entry.reference,
+        sku: entry.sku,
+        productName: entry.productName,
+        party: entry.supplier,
+        quantity: entry.quantity
+      }))}
+      title="Historial de entradas"
+      totalUnits={entryHistoryUnits}
+    />
+    <PrintHistoryReport
+      active={printView === "exit-history"}
+      filtersLabel={describeHistoryFilters(exitFilters, historyQuery, "Cliente")}
+      partyLabel="Cliente"
+      rows={filteredExitsAll.map((exit) => ({
+        id: exit.id,
+        date: exit.date,
+        reference: exit.reference,
+        sku: exit.sku,
+        productName: exit.productName,
+        party: exit.client,
+        quantity: exit.quantity
+      }))}
+      title="Historial de salidas"
+      totalUnits={exitHistoryUnits}
+    />
     </>
   );
 }
@@ -3578,6 +3623,116 @@ function PrintNoStockReport({ active, products }: { active: boolean; products: P
 
       <footer className="print-footer one-line">
         <p>Generado: {generatedAt.toLocaleString("es-CO")}</p>
+      </footer>
+    </section>
+  );
+}
+
+const PRINT_HISTORY_MAX_ROWS = 800;
+
+function describeHistoryFilters(filters: HistoryFilters, query: string, partyLabel: string) {
+  const parts: string[] = [];
+  if (filters.from) parts.push(`Desde ${filters.from}`);
+  if (filters.to) parts.push(`Hasta ${filters.to}`);
+  if (filters.party) parts.push(`${partyLabel}: ${filters.party}`);
+  if (query.trim()) parts.push(`Busqueda: "${query.trim()}"`);
+  return parts.length ? parts.join(" - ") : "Historial completo (sin filtros)";
+}
+
+type PrintHistoryRow = {
+  id: string;
+  date: string;
+  reference: string;
+  sku: string;
+  productName: string;
+  party: string;
+  quantity: number;
+};
+
+function PrintHistoryReport({
+  active,
+  filtersLabel,
+  partyLabel,
+  rows,
+  title,
+  totalUnits
+}: {
+  active: boolean;
+  filtersLabel: string;
+  partyLabel: string;
+  rows: PrintHistoryRow[];
+  title: string;
+  totalUnits: number;
+}) {
+  const generatedAt = new Date();
+  const visibleRows = rows.slice(0, PRINT_HISTORY_MAX_ROWS);
+  const truncated = rows.length > visibleRows.length;
+
+  return (
+    <section className={active ? "print-document active-print" : "print-document"} aria-hidden="true">
+      <header className="print-header">
+        <div className="print-brand">
+          <img src="/assets/yota-logo.png" alt="YOTA Montacargas" />
+          <div>
+            <strong>YOTA Montacargas</strong>
+            <span>{title}</span>
+          </div>
+        </div>
+        <div className="print-stamp">
+          <span>Movimientos</span>
+          <strong>{rows.length}</strong>
+        </div>
+      </header>
+
+      <section className="print-meta">
+        <div>
+          <span>Fecha de reporte</span>
+          <strong>{generatedAt.toLocaleDateString("es-CO")}</strong>
+        </div>
+        <div>
+          <span>Filtros</span>
+          <strong>{filtersLabel}</strong>
+        </div>
+        <div>
+          <span>Movimientos</span>
+          <strong>{rows.length}</strong>
+        </div>
+        <div>
+          <span>Total unidades</span>
+          <strong>{totalUnits}</strong>
+        </div>
+      </section>
+
+      <table className="print-table stock-print-table">
+        <thead>
+          <tr>
+            <th>Fecha</th>
+            <th>Referencia</th>
+            <th>Ref. producto</th>
+            <th>Producto</th>
+            <th>{partyLabel}</th>
+            <th>Cant.</th>
+          </tr>
+        </thead>
+        <tbody>
+          {visibleRows.map((row) => (
+            <tr key={row.id}>
+              <td>{row.date}</td>
+              <td>{row.reference}</td>
+              <td>{row.sku}</td>
+              <td>{row.productName}</td>
+              <td>{row.party || "-"}</td>
+              <td>{row.quantity}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+
+      <footer className="print-footer one-line">
+        <p>
+          Generado: {generatedAt.toLocaleString("es-CO")}
+          {truncated ? ` - Mostrando ${visibleRows.length} de ${rows.length} movimientos; use filtros para acotar.` : ""}
+        </p>
       </footer>
     </section>
   );
