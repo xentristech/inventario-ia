@@ -1537,24 +1537,60 @@ function App() {
     }
 
     setExtracting(true);
+
+    let fileToSend = invoiceFile;
+    if (invoiceFile.type.startsWith("image/") && invoiceFile.size > UPLOAD_COMPRESS_THRESHOLD) {
+      setInvoiceStatus("Optimizando imagen...");
+      try {
+        const compressed = await compressImageFile(invoiceFile);
+        if (compressed.size < invoiceFile.size) fileToSend = compressed;
+      } catch {
+        // si no se puede comprimir (formato raro), se intenta con el original
+      }
+    }
+
+    if (fileToSend.size > MAX_UPLOAD_BYTES) {
+      setInvoiceStatus(
+        invoiceFile.type === "application/pdf"
+          ? "El PDF pesa mas de 4 MB y el servidor no lo acepta. Exportalo mas liviano o sube una foto de la factura."
+          : "La imagen es demasiado grande incluso optimizada. Intenta con una foto de menor resolucion."
+      );
+      setExtracting(false);
+      return;
+    }
+
     setInvoiceStatus("Procesando factura...");
     const form = new FormData();
-    form.append("invoice", invoiceFile);
+    form.append("invoice", fileToSend, fileToSend.name);
 
     try {
       const response = await fetch("/api/invoices/extract", {
         method: "POST",
         body: form
       });
-      const payload = await response.json();
+      const text = await response.text();
+      let payload: InvoiceExtraction | { error?: string } | null = null;
+      try {
+        payload = JSON.parse(text);
+      } catch {
+        payload = null;
+      }
       if (!response.ok) {
-        setInvoiceStatus(formatInvoiceError(payload.error));
+        if (response.status === 413) {
+          setInvoiceStatus("El archivo es muy grande para el servidor (maximo 4 MB). Intenta con una foto mas liviana.");
+        } else {
+          setInvoiceStatus(formatInvoiceError((payload as { error?: string } | null)?.error || ""));
+        }
+        return;
+      }
+      if (!payload) {
+        setInvoiceStatus("El servidor devolvio una respuesta invalida. Intenta de nuevo.");
         return;
       }
       setInvoiceDraft(payload as InvoiceExtraction);
       setInvoiceStatus("Factura lista para revisar.");
     } catch {
-      setInvoiceStatus("No se pudo conectar con el servidor local.");
+      setInvoiceStatus("No se pudo conectar con el servidor. Revisa tu conexion e intenta de nuevo.");
     } finally {
       setExtracting(false);
     }
@@ -4280,6 +4316,38 @@ const HISTORY_PAGE_SIZE = 50;
 const PRODUCT_PAGE_SIZE = 24;
 const GROUP_PAGE_SIZE = 20;
 const ADMIN_KEY = "Yota2025$";
+// Vercel rechaza cuerpos de mas de ~4.5 MB, se deja margen
+const MAX_UPLOAD_BYTES = 4 * 1024 * 1024;
+const UPLOAD_COMPRESS_THRESHOLD = 1.5 * 1024 * 1024;
+
+async function compressImageFile(file: File): Promise<File> {
+  const dataUrl = await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+  const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+    const el = new Image();
+    el.onload = () => resolve(el);
+    el.onerror = () => reject(new Error("IMAGE_DECODE_FAILED"));
+    el.src = dataUrl;
+  });
+
+  const maxSide = 2200;
+  const scale = Math.min(1, maxSide / Math.max(image.width, image.height));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(image.width * scale));
+  canvas.height = Math.max(1, Math.round(image.height * scale));
+  const context = canvas.getContext("2d");
+  if (!context) return file;
+  context.drawImage(image, 0, 0, canvas.width, canvas.height);
+
+  const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.82));
+  if (!blob) return file;
+  const baseName = file.name.replace(/\.[^.]+$/, "") || "factura";
+  return new File([blob], `${baseName}.jpg`, { type: "image/jpeg" });
+}
 
 type MovementGroup<T> = {
   key: string;
