@@ -236,6 +236,7 @@ function App() {
   const [entryStatus, setEntryStatus] = useState("");
   const [printableEntry, setPrintableEntry] = useState<ProductEntry[]>([]);
   const [entryHistoryQuery, setEntryHistoryQuery] = useState("");
+  const [entryPage, setEntryPage] = useState(0);
   const [entryFilters, setEntryFilters] = useState<HistoryFilters>(emptyHistoryFilters());
   const [entrySmartQuery, setEntrySmartQuery] = useState("");
   const [entrySmartStatus, setEntrySmartStatus] = useState("");
@@ -253,6 +254,9 @@ function App() {
   const [importRows, setImportRows] = useState<ImportRow[]>([]);
   const [importStatus, setImportStatus] = useState("");
   const [historyQuery, setHistoryQuery] = useState("");
+  const [exitPage, setExitPage] = useState(0);
+  const [productPage, setProductPage] = useState(0);
+  const [returnPage, setReturnPage] = useState(0);
   const [exitFilters, setExitFilters] = useState<HistoryFilters>(emptyHistoryFilters());
   const [exitSmartQuery, setExitSmartQuery] = useState("");
   const [exitSmartStatus, setExitSmartStatus] = useState("");
@@ -366,6 +370,15 @@ function App() {
     );
   }, [products, query]);
 
+  const pagedProducts = useMemo(
+    () => pageSlice(filteredProducts, productPage, PRODUCT_PAGE_SIZE),
+    [filteredProducts, productPage]
+  );
+
+  useEffect(() => setProductPage(0), [query]);
+  useEffect(() => setEntryPage(0), [entryHistoryQuery, entryFilters]);
+  useEffect(() => setExitPage(0), [historyQuery, exitFilters]);
+
   const selectedExitProduct = useMemo(
     () => matchProductForExit(products, exitForm.sku).product,
     [products, exitForm.sku]
@@ -398,7 +411,10 @@ function App() {
     () => filterEntryHistory(entries, entryHistoryQuery, entryFilters),
     [entries, entryHistoryQuery, entryFilters]
   );
-  const filteredHistoryEntries = useMemo(() => filteredEntriesAll.slice(0, 80), [filteredEntriesAll]);
+  const filteredHistoryEntries = useMemo(
+    () => pageSlice(filteredEntriesAll, entryPage, HISTORY_PAGE_SIZE),
+    [filteredEntriesAll, entryPage]
+  );
   const entryHistoryUnits = useMemo(
     () => filteredEntriesAll.reduce((sum, entry) => sum + entry.quantity, 0),
     [filteredEntriesAll]
@@ -407,7 +423,10 @@ function App() {
     () => filterExitHistory(exits, historyQuery, exitFilters),
     [exits, historyQuery, exitFilters]
   );
-  const filteredHistoryExits = useMemo(() => filteredExitsAll.slice(0, 80), [filteredExitsAll]);
+  const filteredHistoryExits = useMemo(
+    () => pageSlice(filteredExitsAll, exitPage, HISTORY_PAGE_SIZE),
+    [filteredExitsAll, exitPage]
+  );
   const exitHistoryUnits = useMemo(
     () => filteredExitsAll.reduce((sum, exit) => sum + exit.quantity, 0),
     [filteredExitsAll]
@@ -1688,7 +1707,7 @@ function App() {
                 />
               </div>
               <div className="product-list">
-                {filteredProducts.map((product) => (
+                {pagedProducts.map((product) => (
                   <ProductCard
                     key={product.id}
                     product={product}
@@ -1700,6 +1719,12 @@ function App() {
                 ))}
                 {!filteredProducts.length && <EmptyState label="Sin productos en esta vista." />}
               </div>
+              <Paginator
+                page={productPage}
+                total={filteredProducts.length}
+                pageSize={PRODUCT_PAGE_SIZE}
+                onPage={setProductPage}
+              />
             </section>
           </section>
         )}
@@ -1980,6 +2005,12 @@ function App() {
                         ))}
                       </tbody>
                     </table>
+                    <Paginator
+                      page={entryPage}
+                      total={filteredEntriesAll.length}
+                      pageSize={HISTORY_PAGE_SIZE}
+                      onPage={setEntryPage}
+                    />
                   </div>
                 ) : (
                   <EmptyState label="No hay entradas que coincidan con esa busqueda." />
@@ -2316,6 +2347,12 @@ function App() {
                         ))}
                       </tbody>
                     </table>
+                    <Paginator
+                      page={exitPage}
+                      total={filteredExitsAll.length}
+                      pageSize={HISTORY_PAGE_SIZE}
+                      onPage={setExitPage}
+                    />
                   </div>
                 ) : (
                   <EmptyState label="No hay salidas que coincidan con esa busqueda." />
@@ -2534,7 +2571,7 @@ function App() {
                       </tr>
                     </thead>
                     <tbody>
-                      {productReturns.slice(0, 80).map((item) => (
+                      {pageSlice(productReturns, returnPage, HISTORY_PAGE_SIZE).map((item) => (
                         <tr key={item.id}>
                           <td>{item.date}</td>
                           <td>{labelForReturnType(item.type)}</td>
@@ -2552,6 +2589,12 @@ function App() {
                       ))}
                     </tbody>
                   </table>
+                  <Paginator
+                    page={returnPage}
+                    total={productReturns.length}
+                    pageSize={HISTORY_PAGE_SIZE}
+                    onPage={setReturnPage}
+                  />
                 </div>
               ) : (
                 <EmptyState label="Aun no hay cambios o devoluciones registrados." />
@@ -3412,6 +3455,56 @@ function buildClientOptions(exits: ProductExit[]) {
     if (!clients.has(key)) clients.set(key, cleanClient);
   }
   return Array.from(clients.values()).sort((a, b) => a.localeCompare(b, "es"));
+}
+
+const HISTORY_PAGE_SIZE = 50;
+const PRODUCT_PAGE_SIZE = 24;
+
+function pageSlice<T>(items: T[], page: number, pageSize: number) {
+  const pages = Math.max(1, Math.ceil(items.length / pageSize));
+  const safePage = Math.min(Math.max(page, 0), pages - 1);
+  return items.slice(safePage * pageSize, (safePage + 1) * pageSize);
+}
+
+function Paginator({
+  page,
+  total,
+  pageSize,
+  onPage
+}: {
+  page: number;
+  total: number;
+  pageSize: number;
+  onPage: (page: number) => void;
+}) {
+  const pages = Math.max(1, Math.ceil(total / pageSize));
+  if (pages <= 1) return null;
+  const safePage = Math.min(Math.max(page, 0), pages - 1);
+  const start = safePage * pageSize + 1;
+  const end = Math.min(total, (safePage + 1) * pageSize);
+  return (
+    <div className="paginator">
+      <button
+        className="secondary-button tiny"
+        disabled={safePage === 0}
+        onClick={() => onPage(safePage - 1)}
+        type="button"
+      >
+        Anterior
+      </button>
+      <span>
+        {start}-{end} de {total} · pagina {safePage + 1} de {pages}
+      </span>
+      <button
+        className="secondary-button tiny"
+        disabled={safePage >= pages - 1}
+        onClick={() => onPage(safePage + 1)}
+        type="button"
+      >
+        Siguiente
+      </button>
+    </div>
+  );
 }
 
 type HistoryFilters = {
