@@ -244,11 +244,13 @@ function App() {
   const [entrySmartQuery, setEntrySmartQuery] = useState("");
   const [entrySmartStatus, setEntrySmartStatus] = useState("");
   const [adminUnlocked, setAdminUnlocked] = useState(false);
+  const [adminPromptOpen, setAdminPromptOpen] = useState(false);
   const [adminKeyInput, setAdminKeyInput] = useState("");
   const [adminKeyError, setAdminKeyError] = useState("");
   const [movementEdit, setMovementEdit] = useState<{ kind: "entry" | "exit"; id: string } | null>(null);
   const [movementEditForm, setMovementEditForm] = useState({ date: "", party: "", reference: "", quantity: "1" });
   const [movementDeleteArmed, setMovementDeleteArmed] = useState(false);
+  const [rowDeleteArmed, setRowDeleteArmed] = useState<string | null>(null);
   const [returnForm, setReturnForm] = useState<ReturnForm>(() => emptyReturnForm());
   const [returnStatus, setReturnStatus] = useState("");
   const [printableReturn, setPrintableReturn] = useState<ProductReturn | null>(null);
@@ -764,10 +766,23 @@ function App() {
     event.preventDefault();
     if (adminKeyInput === ADMIN_KEY) {
       setAdminUnlocked(true);
+      setAdminPromptOpen(false);
       setAdminKeyInput("");
       setAdminKeyError("");
     } else {
       setAdminKeyError("Clave incorrecta.");
+    }
+  }
+
+  function toggleAdminMode() {
+    if (adminUnlocked) {
+      setAdminUnlocked(false);
+      setAdminPromptOpen(false);
+      cancelMovementEdit();
+    } else {
+      setAdminPromptOpen((current) => !current);
+      setAdminKeyInput("");
+      setAdminKeyError("");
     }
   }
 
@@ -837,26 +852,40 @@ function App() {
     cancelMovementEdit();
   }
 
+  function performMovementDelete(kind: "entry" | "exit", id: string) {
+    if (kind === "entry") {
+      const record = entries.find((item) => item.id === id);
+      if (record) {
+        setEntries((current) => current.filter((item) => item.id !== record.id));
+        applyProductDelta(record.sku, record.productId, -record.quantity, -record.quantity, 0);
+      }
+    } else {
+      const record = exits.find((item) => item.id === id);
+      if (record) {
+        setExits((current) => current.filter((item) => item.id !== record.id));
+        applyProductDelta(record.sku, record.productId, record.quantity, 0, -record.quantity);
+      }
+    }
+  }
+
   function deleteMovement() {
     if (!movementEdit) return;
     if (!movementDeleteArmed) {
       setMovementDeleteArmed(true);
       return;
     }
-    if (movementEdit.kind === "entry") {
-      const record = entries.find((item) => item.id === movementEdit.id);
-      if (record) {
-        setEntries((current) => current.filter((item) => item.id !== record.id));
-        applyProductDelta(record.sku, record.productId, -record.quantity, -record.quantity, 0);
-      }
-    } else {
-      const record = exits.find((item) => item.id === movementEdit.id);
-      if (record) {
-        setExits((current) => current.filter((item) => item.id !== record.id));
-        applyProductDelta(record.sku, record.productId, record.quantity, 0, -record.quantity);
-      }
-    }
+    performMovementDelete(movementEdit.kind, movementEdit.id);
     cancelMovementEdit();
+  }
+
+  function requestRowDelete(kind: "entry" | "exit", id: string) {
+    if (rowDeleteArmed !== id) {
+      setRowDeleteArmed(id);
+      return;
+    }
+    setRowDeleteArmed(null);
+    performMovementDelete(kind, id);
+    if (movementEdit?.id === id) cancelMovementEdit();
   }
 
   function clearHistoryFilters(kind: "entries" | "exits") {
@@ -1762,6 +1791,14 @@ function App() {
             <span className="cloud-status">{cloudStatus}</span>
           </div>
           <div className="topbar-actions">
+            <button
+              className={adminUnlocked ? "secondary-button active-toggle" : "secondary-button"}
+              onClick={toggleAdminMode}
+              type="button"
+            >
+              <Lock size={17} />
+              {adminUnlocked ? "Admin activo" : "Superadmin"}
+            </button>
             <button className="secondary-button" onClick={exportInventoryExcel} type="button">
               <FileSpreadsheet size={17} />
               Exportar
@@ -1784,6 +1821,36 @@ function App() {
             </button>
           </div>
         </header>
+
+        {adminPromptOpen && !adminUnlocked && (
+          <div className="movement-editor admin-prompt">
+            <form onSubmit={unlockAdmin}>
+              <div className="panel-title">
+                <Lock size={16} />
+                <h2>Modo superadministrador</h2>
+              </div>
+              <label>
+                Clave de administrador
+                <input
+                  autoFocus
+                  onChange={(event) => setAdminKeyInput(event.target.value)}
+                  placeholder="Clave de administrador"
+                  type="password"
+                  value={adminKeyInput}
+                />
+              </label>
+              {adminKeyError && <p className="status-line">{adminKeyError}</p>}
+              <div className="button-row">
+                <button className="primary-button" type="submit">
+                  Activar
+                </button>
+                <button className="secondary-button" onClick={() => setAdminPromptOpen(false)} type="button">
+                  Cancelar
+                </button>
+              </div>
+            </form>
+          </div>
+        )}
 
         {view === "dashboard" && (
           <Dashboard
@@ -2255,7 +2322,7 @@ function App() {
                                   <th>Ref</th>
                                   <th>Producto</th>
                                   <th>Cant.</th>
-                                  <th></th>
+                                  {adminUnlocked && <th></th>}
                                 </tr>
                               </thead>
                               <tbody>
@@ -2264,16 +2331,26 @@ function App() {
                                     <td>{entry.sku}</td>
                                     <td>{entry.productName}</td>
                                     <td>{entry.quantity}</td>
-                                    <td>
-                                      <button
-                                        className="icon-button"
-                                        onClick={() => startMovementEdit("entry", entry, entry.supplier)}
-                                        title="Editar (requiere clave)"
-                                        type="button"
-                                      >
-                                        <Pencil size={14} />
-                                      </button>
-                                    </td>
+                                    {adminUnlocked && (
+                                      <td className="one-line">
+                                        <button
+                                          className="icon-button"
+                                          onClick={() => startMovementEdit("entry", entry, entry.supplier)}
+                                          title="Editar"
+                                          type="button"
+                                        >
+                                          <Pencil size={14} />
+                                        </button>
+                                        <button
+                                          className={rowDeleteArmed === entry.id ? "icon-button danger-armed" : "icon-button"}
+                                          onClick={() => requestRowDelete("entry", entry.id)}
+                                          title={rowDeleteArmed === entry.id ? "Confirmar eliminacion" : "Eliminar"}
+                                          type="button"
+                                        >
+                                          <Trash2 size={14} />
+                                        </button>
+                                      </td>
+                                    )}
                                   </tr>
                                 ))}
                               </tbody>
@@ -2302,7 +2379,7 @@ function App() {
                           <th>Producto</th>
                           <th>Proveedor</th>
                           <th>Cant.</th>
-                          <th></th>
+                          {adminUnlocked && <th></th>}
                         </tr>
                       </thead>
                       <tbody>
@@ -2314,16 +2391,26 @@ function App() {
                             <td>{entry.productName}</td>
                             <td>{entry.supplier}</td>
                             <td>{entry.quantity}</td>
-                            <td>
-                              <button
-                                className="icon-button"
-                                onClick={() => startMovementEdit("entry", entry, entry.supplier)}
-                                title="Editar (requiere clave)"
-                                type="button"
-                              >
-                                <Pencil size={14} />
-                              </button>
-                            </td>
+                            {adminUnlocked && (
+                              <td className="one-line">
+                                <button
+                                  className="icon-button"
+                                  onClick={() => startMovementEdit("entry", entry, entry.supplier)}
+                                  title="Editar"
+                                  type="button"
+                                >
+                                  <Pencil size={14} />
+                                </button>
+                                <button
+                                  className={rowDeleteArmed === entry.id ? "icon-button danger-armed" : "icon-button"}
+                                  onClick={() => requestRowDelete("entry", entry.id)}
+                                  title={rowDeleteArmed === entry.id ? "Confirmar eliminacion" : "Eliminar"}
+                                  type="button"
+                                >
+                                  <Trash2 size={14} />
+                                </button>
+                              </td>
+                            )}
                           </tr>
                         ))}
                       </tbody>
@@ -2687,7 +2774,7 @@ function App() {
                                   <th>Ref</th>
                                   <th>Producto</th>
                                   <th>Cant.</th>
-                                  <th></th>
+                                  {adminUnlocked && <th></th>}
                                 </tr>
                               </thead>
                               <tbody>
@@ -2696,16 +2783,26 @@ function App() {
                                     <td>{exit.sku}</td>
                                     <td>{exit.productName}</td>
                                     <td>{exit.quantity}</td>
-                                    <td>
-                                      <button
-                                        className="icon-button"
-                                        onClick={() => startMovementEdit("exit", exit, exit.client)}
-                                        title="Editar (requiere clave)"
-                                        type="button"
-                                      >
-                                        <Pencil size={14} />
-                                      </button>
-                                    </td>
+                                    {adminUnlocked && (
+                                      <td className="one-line">
+                                        <button
+                                          className="icon-button"
+                                          onClick={() => startMovementEdit("exit", exit, exit.client)}
+                                          title="Editar"
+                                          type="button"
+                                        >
+                                          <Pencil size={14} />
+                                        </button>
+                                        <button
+                                          className={rowDeleteArmed === exit.id ? "icon-button danger-armed" : "icon-button"}
+                                          onClick={() => requestRowDelete("exit", exit.id)}
+                                          title={rowDeleteArmed === exit.id ? "Confirmar eliminacion" : "Eliminar"}
+                                          type="button"
+                                        >
+                                          <Trash2 size={14} />
+                                        </button>
+                                      </td>
+                                    )}
                                   </tr>
                                 ))}
                               </tbody>
@@ -2734,7 +2831,7 @@ function App() {
                           <th>Producto</th>
                           <th>Cliente</th>
                           <th>Cant.</th>
-                          <th></th>
+                          {adminUnlocked && <th></th>}
                         </tr>
                       </thead>
                       <tbody>
@@ -2746,16 +2843,26 @@ function App() {
                             <td>{exit.productName}</td>
                             <td>{exit.client}</td>
                             <td>{exit.quantity}</td>
-                            <td>
-                              <button
-                                className="icon-button"
-                                onClick={() => startMovementEdit("exit", exit, exit.client)}
-                                title="Editar (requiere clave)"
-                                type="button"
-                              >
-                                <Pencil size={14} />
-                              </button>
-                            </td>
+                            {adminUnlocked && (
+                              <td className="one-line">
+                                <button
+                                  className="icon-button"
+                                  onClick={() => startMovementEdit("exit", exit, exit.client)}
+                                  title="Editar"
+                                  type="button"
+                                >
+                                  <Pencil size={14} />
+                                </button>
+                                <button
+                                  className={rowDeleteArmed === exit.id ? "icon-button danger-armed" : "icon-button"}
+                                  onClick={() => requestRowDelete("exit", exit.id)}
+                                  title={rowDeleteArmed === exit.id ? "Confirmar eliminacion" : "Eliminar"}
+                                  type="button"
+                                >
+                                  <Trash2 size={14} />
+                                </button>
+                              </td>
+                            )}
                           </tr>
                         ))}
                       </tbody>

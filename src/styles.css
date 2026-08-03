@@ -1454,3 +1454,13 @@ tr:last-child td {
   border-color: #e23b2e;
   color: #e23b2e;
 }
+
+.icon-button.danger-armed {
+  border-color: #e23b2e;
+  color: #e23b2e;
+  background: #fdecea;
+}
+
+td.one-line {
+  white-space: nowrap;
+}
