@@ -10,7 +10,9 @@ import {
   FileSpreadsheet,
   FileText,
   ImagePlus,
+  Lock,
   PackagePlus,
+  Pencil,
   Plus,
   Printer,
   RotateCcw,
@@ -241,6 +243,12 @@ function App() {
   const [entryFilters, setEntryFilters] = useState<HistoryFilters>(emptyHistoryFilters());
   const [entrySmartQuery, setEntrySmartQuery] = useState("");
   const [entrySmartStatus, setEntrySmartStatus] = useState("");
+  const [adminUnlocked, setAdminUnlocked] = useState(false);
+  const [adminKeyInput, setAdminKeyInput] = useState("");
+  const [adminKeyError, setAdminKeyError] = useState("");
+  const [movementEdit, setMovementEdit] = useState<{ kind: "entry" | "exit"; id: string } | null>(null);
+  const [movementEditForm, setMovementEditForm] = useState({ date: "", party: "", reference: "", quantity: "1" });
+  const [movementDeleteArmed, setMovementDeleteArmed] = useState(false);
   const [returnForm, setReturnForm] = useState<ReturnForm>(() => emptyReturnForm());
   const [returnStatus, setReturnStatus] = useState("");
   const [printableReturn, setPrintableReturn] = useState<ProductReturn | null>(null);
@@ -728,6 +736,127 @@ function App() {
     } finally {
       setSmartSearching(false);
     }
+  }
+
+  function startMovementEdit(
+    kind: "entry" | "exit",
+    record: { id: string; date: string; reference: string; quantity: number },
+    party: string
+  ) {
+    setMovementEdit({ kind, id: record.id });
+    setMovementEditForm({
+      date: record.date,
+      party,
+      reference: record.reference,
+      quantity: String(record.quantity)
+    });
+    setMovementDeleteArmed(false);
+    setAdminKeyError("");
+  }
+
+  function cancelMovementEdit() {
+    setMovementEdit(null);
+    setMovementDeleteArmed(false);
+    setAdminKeyError("");
+  }
+
+  function unlockAdmin(event: FormEvent) {
+    event.preventDefault();
+    if (adminKeyInput === ADMIN_KEY) {
+      setAdminUnlocked(true);
+      setAdminKeyInput("");
+      setAdminKeyError("");
+    } else {
+      setAdminKeyError("Clave incorrecta.");
+    }
+  }
+
+  function applyProductDelta(
+    sku: string,
+    productId: string | undefined,
+    stockDelta: number,
+    entriesDelta: number,
+    exitsDelta: number
+  ) {
+    const cleanSku = normalizeSku(sku);
+    setProducts((current) =>
+      current.map((item) => {
+        const match = productId ? item.id === productId : Boolean(cleanSku) && normalizeSku(item.sku) === cleanSku;
+        if (!match) return item;
+        return {
+          ...item,
+          stock: Math.max(0, item.stock + stockDelta),
+          entries: Math.max(0, (item.entries || 0) + entriesDelta),
+          exits: Math.max(0, (item.exits || 0) + exitsDelta),
+          updatedAt: new Date().toISOString()
+        };
+      })
+    );
+  }
+
+  function saveMovementEdit(event: FormEvent) {
+    event.preventDefault();
+    if (!movementEdit) return;
+    const quantity = toNumber(movementEditForm.quantity);
+    if (!(quantity > 0)) return;
+    const date = movementEditForm.date || new Date().toISOString().slice(0, 10);
+    const party = movementEditForm.party.trim();
+    const reference = movementEditForm.reference.trim();
+
+    if (movementEdit.kind === "entry") {
+      const record = entries.find((item) => item.id === movementEdit.id);
+      if (!record) {
+        cancelMovementEdit();
+        return;
+      }
+      const delta = quantity - record.quantity;
+      setEntries((current) =>
+        current.map((item) =>
+          item.id === record.id
+            ? { ...item, date, supplier: party || item.supplier, reference: reference || item.reference, quantity }
+            : item
+        )
+      );
+      if (delta !== 0) applyProductDelta(record.sku, record.productId, delta, delta, 0);
+    } else {
+      const record = exits.find((item) => item.id === movementEdit.id);
+      if (!record) {
+        cancelMovementEdit();
+        return;
+      }
+      const delta = quantity - record.quantity;
+      setExits((current) =>
+        current.map((item) =>
+          item.id === record.id
+            ? { ...item, date, client: party || item.client, reference: reference || item.reference, quantity }
+            : item
+        )
+      );
+      if (delta !== 0) applyProductDelta(record.sku, record.productId, -delta, 0, delta);
+    }
+    cancelMovementEdit();
+  }
+
+  function deleteMovement() {
+    if (!movementEdit) return;
+    if (!movementDeleteArmed) {
+      setMovementDeleteArmed(true);
+      return;
+    }
+    if (movementEdit.kind === "entry") {
+      const record = entries.find((item) => item.id === movementEdit.id);
+      if (record) {
+        setEntries((current) => current.filter((item) => item.id !== record.id));
+        applyProductDelta(record.sku, record.productId, -record.quantity, -record.quantity, 0);
+      }
+    } else {
+      const record = exits.find((item) => item.id === movementEdit.id);
+      if (record) {
+        setExits((current) => current.filter((item) => item.id !== record.id));
+        applyProductDelta(record.sku, record.productId, record.quantity, 0, -record.quantity);
+      }
+    }
+    cancelMovementEdit();
   }
 
   function clearHistoryFilters(kind: "entries" | "exits") {
@@ -1494,6 +1623,92 @@ function App() {
     URL.revokeObjectURL(url);
   }
 
+  const movementEditor = movementEdit && (
+    <div className="movement-editor">
+      {!adminUnlocked ? (
+        <form onSubmit={unlockAdmin}>
+          <div className="panel-title">
+            <Lock size={16} />
+            <h2>Clave de administrador</h2>
+          </div>
+          <label>
+            Clave para editar movimientos
+            <input
+              autoFocus
+              onChange={(event) => setAdminKeyInput(event.target.value)}
+              placeholder="Clave de administrador"
+              type="password"
+              value={adminKeyInput}
+            />
+          </label>
+          {adminKeyError && <p className="status-line">{adminKeyError}</p>}
+          <div className="button-row">
+            <button className="primary-button" type="submit">
+              Desbloquear
+            </button>
+            <button className="secondary-button" onClick={cancelMovementEdit} type="button">
+              Cancelar
+            </button>
+          </div>
+        </form>
+      ) : (
+        <form onSubmit={saveMovementEdit}>
+          <div className="panel-title">
+            <Pencil size={16} />
+            <h2>Editar {movementEdit.kind === "entry" ? "entrada" : "salida"}</h2>
+          </div>
+          <div className="form-row">
+            <label>
+              Fecha
+              <input
+                onChange={(event) => setMovementEditForm({ ...movementEditForm, date: event.target.value })}
+                type="date"
+                value={movementEditForm.date}
+              />
+            </label>
+            <label>
+              {movementEdit.kind === "entry" ? "Proveedor" : "Cliente"}
+              <input
+                onChange={(event) => setMovementEditForm({ ...movementEditForm, party: event.target.value })}
+                value={movementEditForm.party}
+              />
+            </label>
+          </div>
+          <div className="form-row">
+            <label>
+              Referencia
+              <input
+                onChange={(event) => setMovementEditForm({ ...movementEditForm, reference: event.target.value })}
+                value={movementEditForm.reference}
+              />
+            </label>
+            <label>
+              Cantidad
+              <input
+                min="1"
+                onChange={(event) => setMovementEditForm({ ...movementEditForm, quantity: event.target.value })}
+                type="number"
+                value={movementEditForm.quantity}
+              />
+            </label>
+          </div>
+          <div className="button-row">
+            <button className="primary-button" type="submit">
+              Guardar cambios
+            </button>
+            <button className="secondary-button danger" onClick={deleteMovement} type="button">
+              <Trash2 size={15} />
+              {movementDeleteArmed ? "Confirmar eliminacion" : "Eliminar"}
+            </button>
+            <button className="secondary-button" onClick={cancelMovementEdit} type="button">
+              Cancelar
+            </button>
+          </div>
+        </form>
+      )}
+    </div>
+  );
+
   return (
     <>
     <div className="app-shell">
@@ -2011,6 +2226,7 @@ function App() {
                   Detallado
                 </button>
               </div>
+              {movementEdit?.kind === "entry" && movementEditor}
 
               {entries.length ? (
                 entryGrouped ? (
@@ -2039,6 +2255,7 @@ function App() {
                                   <th>Ref</th>
                                   <th>Producto</th>
                                   <th>Cant.</th>
+                                  <th></th>
                                 </tr>
                               </thead>
                               <tbody>
@@ -2047,6 +2264,16 @@ function App() {
                                     <td>{entry.sku}</td>
                                     <td>{entry.productName}</td>
                                     <td>{entry.quantity}</td>
+                                    <td>
+                                      <button
+                                        className="icon-button"
+                                        onClick={() => startMovementEdit("entry", entry, entry.supplier)}
+                                        title="Editar (requiere clave)"
+                                        type="button"
+                                      >
+                                        <Pencil size={14} />
+                                      </button>
+                                    </td>
                                   </tr>
                                 ))}
                               </tbody>
@@ -2075,6 +2302,7 @@ function App() {
                           <th>Producto</th>
                           <th>Proveedor</th>
                           <th>Cant.</th>
+                          <th></th>
                         </tr>
                       </thead>
                       <tbody>
@@ -2086,6 +2314,16 @@ function App() {
                             <td>{entry.productName}</td>
                             <td>{entry.supplier}</td>
                             <td>{entry.quantity}</td>
+                            <td>
+                              <button
+                                className="icon-button"
+                                onClick={() => startMovementEdit("entry", entry, entry.supplier)}
+                                title="Editar (requiere clave)"
+                                type="button"
+                              >
+                                <Pencil size={14} />
+                              </button>
+                            </td>
                           </tr>
                         ))}
                       </tbody>
@@ -2371,6 +2609,7 @@ function App() {
                   Detallado
                 </button>
               </div>
+              {movementEdit?.kind === "exit" && movementEditor}
 
               {historyQuery.trim() && (
                 <div className="client-history">
@@ -2448,6 +2687,7 @@ function App() {
                                   <th>Ref</th>
                                   <th>Producto</th>
                                   <th>Cant.</th>
+                                  <th></th>
                                 </tr>
                               </thead>
                               <tbody>
@@ -2456,6 +2696,16 @@ function App() {
                                     <td>{exit.sku}</td>
                                     <td>{exit.productName}</td>
                                     <td>{exit.quantity}</td>
+                                    <td>
+                                      <button
+                                        className="icon-button"
+                                        onClick={() => startMovementEdit("exit", exit, exit.client)}
+                                        title="Editar (requiere clave)"
+                                        type="button"
+                                      >
+                                        <Pencil size={14} />
+                                      </button>
+                                    </td>
                                   </tr>
                                 ))}
                               </tbody>
@@ -2484,6 +2734,7 @@ function App() {
                           <th>Producto</th>
                           <th>Cliente</th>
                           <th>Cant.</th>
+                          <th></th>
                         </tr>
                       </thead>
                       <tbody>
@@ -2495,6 +2746,16 @@ function App() {
                             <td>{exit.productName}</td>
                             <td>{exit.client}</td>
                             <td>{exit.quantity}</td>
+                            <td>
+                              <button
+                                className="icon-button"
+                                onClick={() => startMovementEdit("exit", exit, exit.client)}
+                                title="Editar (requiere clave)"
+                                type="button"
+                              >
+                                <Pencil size={14} />
+                              </button>
+                            </td>
                           </tr>
                         ))}
                       </tbody>
@@ -3612,6 +3873,7 @@ function buildClientOptions(exits: ProductExit[]) {
 const HISTORY_PAGE_SIZE = 50;
 const PRODUCT_PAGE_SIZE = 24;
 const GROUP_PAGE_SIZE = 20;
+const ADMIN_KEY = "Yota2025$";
 
 type MovementGroup<T> = {
   key: string;

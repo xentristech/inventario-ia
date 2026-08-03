@@ -1432,3 +1432,25 @@ tr:last-child td {
   border-color: var(--coral, #e23b2e);
   color: var(--coral, #e23b2e);
 }
+
+.movement-editor {
+  border: 1px solid var(--line);
+  border-left: 3px solid #e23b2e;
+  border-radius: 8px;
+  background: #fffaf9;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.movement-editor form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.secondary-button.danger {
+  border-color: #e23b2e;
+  color: #e23b2e;
+}
