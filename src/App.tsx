@@ -1669,6 +1669,32 @@ function App() {
     };
 
     setProducts((current) => applyItemsToInventory(current, invoiceDraft, record.id));
+
+    const batchId = createId("entrada");
+    const date = invoiceDraft.invoiceDate || now.slice(0, 10);
+    const entryRecords: ProductEntry[] = invoiceDraft.items
+      .filter((item) => item.quantity > 0)
+      .map((item, index) => {
+        const sku = normalizeSku(item.sku) || "";
+        const match = draftMatches[index];
+        return {
+          id: createId("ent"),
+          batchId,
+          date,
+          sku: sku || (match?.product ? match.product.sku : "SIN-REF"),
+          productId: match?.product?.id,
+          productName: item.name,
+          brand: match?.product?.brand,
+          location: match?.product?.location || (item.location || "").trim().toUpperCase() || undefined,
+          quantity: item.quantity,
+          supplier: invoiceDraft.supplier || "Factura",
+          reference: `Factura ${invoiceDraft.invoiceNumber || record.id.slice(0, 10)}`,
+          unitCost: item.unitCost || undefined,
+          createdAt: now
+        };
+      });
+    if (entryRecords.length) setEntries((current) => [...entryRecords, ...current]);
+
     setInvoices((current) => [record, ...current]);
     setInvoiceDraft(null);
     setInvoiceFile(null);
@@ -4367,8 +4393,10 @@ const ADMIN_KEY = "Yota2025$";
 const MAX_UPLOAD_BYTES = 4 * 1024 * 1024;
 const UPLOAD_COMPRESS_THRESHOLD = 1.5 * 1024 * 1024;
 
+// Quita todo lo que va antes del primer digito (letras, "/" y otros separadores),
+// p. ej. "TSA/TY13511-78201-71" -> "13511-78201-71"
 function stripLeadingLetters(sku: string) {
-  return sku.replace(/^[A-Z]+/, "");
+  return sku.replace(/^[^0-9]*/, "");
 }
 
 function isTvhInvoice(extraction: InvoiceExtraction) {
